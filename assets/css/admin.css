@@ -1,0 +1,46 @@
+/* WooCommerce ShipStation Integration WR — Admin Styles */
+
+.wsi-wr-tool-result {
+    margin-top: 8px;
+    max-width: 640px;
+}
+
+.wsi-wr-tool-result.notice {
+    margin: 8px 0 0;
+    padding: 8px 12px;
+}
+
+.wsi-wr-sample-result {
+    margin-top: 12px;
+    max-width: 640px;
+}
+
+.wsi-wr-sample-table {
+    margin-top: 8px;
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 480px;
+}
+
+.wsi-wr-sample-table th,
+.wsi-wr-sample-table td {
+    padding: 6px 12px;
+    text-align: left;
+    border-bottom: 1px solid #f0f0f1;
+}
+
+.wsi-wr-sample-table thead th {
+    background: #f6f7f7;
+    font-weight: 600;
+}
+
+.wsi-wr-available-confirmed {
+    color: #46b450;
+    font-weight: 600;
+}
+
+.wsi-wr-pagination-info {
+    color: #646970;
+    font-size: 12px;
+    margin-top: 4px;
+}
