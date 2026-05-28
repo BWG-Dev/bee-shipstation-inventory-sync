@@ -1,5 +1,7 @@
 /* WooCommerce ShipStation Integration WR — Admin Styles */
 
+/* ── Shared ─────────────────────────────────────────────────────────────── */
+
 .wsi-wr-tool-result {
     margin-top: 8px;
     max-width: 640px;
@@ -9,6 +11,19 @@
     margin: 8px 0 0;
     padding: 8px 12px;
 }
+
+.wsi-wr-available-confirmed {
+    color: #46b450;
+    font-weight: 600;
+}
+
+.wsi-wr-pagination-info {
+    color: #646970;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+/* ── Phase 2 — Inventory Sample ─────────────────────────────────────────── */
 
 .wsi-wr-sample-result {
     margin-top: 12px;
@@ -34,13 +49,155 @@
     font-weight: 600;
 }
 
-.wsi-wr-available-confirmed {
-    color: #46b450;
-    font-weight: 600;
+/* ── Phase 3 — SKU Alignment Report ─────────────────────────────────────── */
+
+.wsi-wr-summary-box {
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    border-radius: 3px;
+    padding: 12px 16px;
+    max-width: 520px;
+    margin-bottom: 12px;
 }
 
-.wsi-wr-pagination-info {
+.wsi-wr-summary-box ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.wsi-wr-summary-box li {
+    padding: 3px 0;
+    color: #3c434a;
+    font-size: 13px;
+}
+
+.wsi-wr-result-section {
+    margin-bottom: 24px;
+}
+
+.wsi-wr-result-section h4 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #3c434a;
+}
+
+.wsi-wr-result-matched h4 {
+    color: #008a20;
+}
+
+.wsi-wr-result-warn h4 {
+    color: #996800;
+}
+
+.wsi-wr-result-info h4 {
+    color: #646970;
+}
+
+.wsi-wr-count {
+    font-weight: 400;
+    color: inherit;
+    opacity: 0.8;
+}
+
+.wsi-wr-result-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 4px;
+    font-size: 13px;
+}
+
+.wsi-wr-result-table th,
+.wsi-wr-result-table td {
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid #f0f0f1;
+    vertical-align: top;
+}
+
+.wsi-wr-result-table thead th {
+    background: #f6f7f7;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.wsi-wr-result-table td.wsi-wr-reason {
     color: #646970;
     font-size: 12px;
-    margin-top: 4px;
+    max-width: 260px;
+}
+
+/* ── Phase 3 — Previous Run / Tracked SKU tables ─────────────────────────── */
+
+.wsi-wr-prev-run-table th,
+.wsi-wr-prev-run-table td {
+    padding: 6px 12px;
+    text-align: right;
+}
+
+.wsi-wr-prev-run-table th:first-child,
+.wsi-wr-prev-run-table td:first-child {
+    text-align: left;
+}
+
+.wsi-wr-tracked-table th,
+.wsi-wr-tracked-table td {
+    padding: 6px 10px;
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+.wsi-wr-tracked-table thead th {
+    white-space: nowrap;
+}
+
+.wsi-wr-tracked-table .button-small {
+    min-width: 72px;
+}
+
+/* ── Phase 4 — Dry-Run Report ────────────────────────────────────────────── */
+
+.wsi-wr-result-increase h4 {
+    color: #008a20;
+}
+
+.wsi-wr-result-decrease h4 {
+    color: #996800;
+}
+
+.wsi-wr-result-protected h4 {
+    color: #0073aa;
+}
+
+.wsi-wr-result-zero h4 {
+    color: #cc0000;
+}
+
+.wsi-wr-summary-box .wsi-wr-increase {
+    color: #008a20;
+}
+
+.wsi-wr-summary-box .wsi-wr-decrease {
+    color: #996800;
+}
+
+.wsi-wr-summary-box .wsi-wr-zero {
+    color: #cc0000;
+}
+
+/* ── Phase 5 — Manual Sync ───────────────────────────────────────────────── */
+
+.wsi-wr-result-failed h4 {
+    color: #cc0000;
+}
+
+.wsi-wr-summary-box .wsi-wr-applied {
+    color: #008a20;
+}
+
+.wsi-wr-summary-box .wsi-wr-failed {
+    color: #cc0000;
 }

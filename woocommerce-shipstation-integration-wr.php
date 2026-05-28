@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce ShipStation Integration WR
  * Description: Controlled ShipStation inventory pull integration for WooCommerce with discovery reporting, dry-run synchronization, tracked SKU safety, and scheduled stock updates.
- * Version: 0.1.0
+ * Version: 0.4.0
  * Author: WebReadyNow
  * Text Domain: woocommerce-shipstation-integration-wr
  * Domain Path: /languages
@@ -13,7 +13,7 @@ namespace WebReadyNow\WooCommerceShipStationIntegration;
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'WSI_WR_VERSION', '0.1.0' );
+define( 'WSI_WR_VERSION', '0.4.0' );
 define( 'WSI_WR_PLUGIN_FILE', __FILE__ );
 define( 'WSI_WR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WSI_WR_PLUGIN_URL', plugin_dir_url( __FILE__ ) );

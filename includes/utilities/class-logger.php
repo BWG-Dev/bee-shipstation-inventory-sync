@@ -13,7 +13,7 @@ class Logger {
      * Never log API keys, auth headers, or customer PII.
      */
     public static function log( string $message, string $level = 'info' ): void {
-        if ( 'yes' !== get_option( 'wsi_wr_logging_enabled', 'yes' ) ) {
+        if ( 'yes' !== \WebReadyNow\WooCommerceShipStationIntegration\Admin\Integration::get_setting( 'logging_enabled', 'yes' ) ) {
             return;
         }
 

@@ -24,6 +24,18 @@ class Integration extends \WC_Integration {
     }
 
     /**
+     * Reads a single setting from the WooCommerce Integration settings array.
+     * All plugin code should use this instead of get_option('wsi_wr_*').
+     */
+    public static function get_setting( string $key, $default = '' ) {
+        $settings = get_option( 'woocommerce_wsi_wr_shipstation_settings', [] );
+        if ( ! is_array( $settings ) ) {
+            $settings = [];
+        }
+        return array_key_exists( $key, $settings ) ? $settings[ $key ] : $default;
+    }
+
+    /**
      * Returns the configured API key.
      * Checks constant first, then the separately stored option.
      * Never reads from the main settings array (which never stores the key).
