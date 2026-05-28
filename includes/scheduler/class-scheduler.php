@@ -49,7 +49,7 @@ class Scheduler {
                 self::next_timestamp_for_time( $time ),
                 DAY_IN_SECONDS,
                 self::HOOK,
-                [ 'time_slot' => $time ],
+                [],
                 self::GROUP
             );
         }
@@ -57,10 +57,27 @@ class Scheduler {
 
     /**
      * Cancels all pending recurring actions for this plugin's sync hook.
+     *
+     * Cancels both no-args actions (current registration format) and time_slot-args
+     * actions (legacy format used before this fix) to ensure a clean slate regardless
+     * of which Action Scheduler version is installed — older versions only cancel
+     * no-arg actions when $args = [] is passed.
      */
     public static function unschedule(): void {
-        if ( function_exists( 'as_unschedule_all_actions' ) ) {
-            as_unschedule_all_actions( self::HOOK, [], self::GROUP );
+        if ( ! function_exists( 'as_unschedule_all_actions' ) ) {
+            return;
+        }
+        as_unschedule_all_actions( self::HOOK, [], self::GROUP );
+        $times = array_unique( [
+            '07:00', '12:00', '18:00',
+            Integration::get_setting( 'schedule_time_1', '07:00' ),
+            Integration::get_setting( 'schedule_time_2', '12:00' ),
+            Integration::get_setting( 'schedule_time_3', '18:00' ),
+        ] );
+        foreach ( $times as $time ) {
+            if ( preg_match( '/^\d{2}:\d{2}$/', $time ) ) {
+                as_unschedule_all_actions( self::HOOK, [ 'time_slot' => $time ], self::GROUP );
+            }
         }
     }
 
