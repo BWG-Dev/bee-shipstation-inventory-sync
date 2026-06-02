@@ -29,6 +29,8 @@ $option_names = [
     'wsi_wr_page_size',
     'wsi_wr_request_timeout',
     'woocommerce_wsi_wr_shipstation_settings',
+    'wsi_wr_inventory_locations_cache',
+    'wsi_wr_export_location_id',
 ];
 
 foreach ( $option_names as $option ) {

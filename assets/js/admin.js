@@ -27,6 +27,10 @@
                 $('#wsi-wr-run-manual-sync').on('click', WSI_WR.runManualSync);
             }
 
+            if ($('#wsi-wr-refresh-locations').length) {
+                $('#wsi-wr-refresh-locations').on('click', WSI_WR.refreshLocations);
+            }
+
             if ($('#wsi-wr-approve-sku-btn').length) {
                 $('#wsi-wr-approve-sku-btn').on('click', WSI_WR.approveSku);
                 $(document).on('click', '.wsi-wr-toggle-sync', WSI_WR.toggleTrackedSku);
@@ -655,6 +659,65 @@
             .always(function () {
                 $btn.prop('disabled', false).text(strings.run_manual_sync_label);
                 $spinner.css('visibility', 'hidden');
+            });
+        },
+
+        // ── Export ───────────────────────────────────────────────────────────
+
+        refreshLocations: function (e) {
+            e.preventDefault();
+            var $btn    = $(this);
+            var $result = $('#wsi-wr-refresh-locations-result');
+            var $select = $('#wsi-wr-export-location-select');
+            var strings = WSI_WR_Admin.strings;
+
+            $btn.prop('disabled', true).text(strings.refreshing_locations);
+            $result.removeClass('notice notice-success notice-error').empty();
+
+            $.post(WSI_WR_Admin.ajax_url, {
+                action: 'wsi_wr_refresh_inventory_locations',
+                nonce:  WSI_WR_Admin.nonces.refresh_locations
+            })
+            .done(function (response) {
+                if (response.success) {
+                    var d          = response.data;
+                    var locations  = d.locations || [];
+                    var selectedId = d.selected_location_id || '';
+
+                    // Rebuild the location dropdown
+                    $select.empty();
+                    $select.append(
+                        $('<option>').val('').text(strings.select_location_placeholder)
+                    );
+                    $.each(locations, function (i, loc) {
+                        var label = (loc.name ? loc.name : loc.inventory_location_id) +
+                            ' — ' + loc.inventory_location_id;
+                        var $opt  = $('<option>').val(loc.inventory_location_id).text(label);
+                        if (loc.inventory_location_id === selectedId) {
+                            $opt.prop('selected', true);
+                        }
+                        $select.append($opt);
+                    });
+
+                    var msg = escHtml(d.message || (locations.length + ' location(s) loaded.'));
+                    if (d.auto_selected && selectedId) {
+                        msg += ' ' + escHtml(strings.location_auto_selected);
+                    }
+                    $result.addClass('notice notice-success').html('<p>' + msg + '</p>');
+                } else {
+                    $result.addClass('notice notice-error').html(
+                        '<p><strong>' + escHtml(strings.error) + '</strong> ' +
+                        escHtml(response.data.message) + '</p>'
+                    );
+                }
+            })
+            .fail(function () {
+                $result.addClass('notice notice-error').html(
+                    '<p>' + escHtml(strings.request_failed) + '</p>'
+                );
+            })
+            .always(function () {
+                $btn.prop('disabled', false).text(strings.refresh_locations_label);
             });
         },
 

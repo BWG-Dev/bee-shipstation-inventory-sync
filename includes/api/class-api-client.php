@@ -6,9 +6,10 @@ defined( 'ABSPATH' ) || exit;
 
 class API_Client {
 
-    const BASE_URL          = 'https://api.shipstation.com/v2';
-    const INVENTORY_ENDPOINT = '/inventory';
-    const MAX_PAGES         = 100; // Safety limit — prevents infinite pagination loops
+    const BASE_URL                      = 'https://api.shipstation.com/v2';
+    const INVENTORY_ENDPOINT            = '/inventory';
+    const INVENTORY_LOCATIONS_ENDPOINT  = '/inventory_locations';
+    const MAX_PAGES                     = 100; // Safety limit — prevents infinite pagination loops
 
     private string $api_key;
 
@@ -205,6 +206,182 @@ class API_Client {
             'pages'               => $pages,
             'http_status'         => $http_status,
             'error_message'       => '',
+        ];
+    }
+
+    /**
+     * Fetches all inventory locations from GET /v2/inventory_locations.
+     * Returns ['success', 'locations', 'error_message', 'http_status', 'duration_ms'].
+     */
+    public function fetch_inventory_locations(): array {
+        $start    = microtime( true );
+        $base_url = apply_filters( 'wsi_wr_api_base_url', self::BASE_URL );
+        $timeout  = max( 5, min( 120, (int) apply_filters( 'wsi_wr_api_timeout', 30 ) ) );
+        $url      = rtrim( $base_url, '/' ) . self::INVENTORY_LOCATIONS_ENDPOINT;
+
+        $args = apply_filters( 'wsi_wr_api_request_args', [
+            'timeout'    => $timeout,
+            'user-agent' => 'WooCommerce ShipStation Integration WR/' . WSI_WR_VERSION,
+            'headers'    => [],
+        ] );
+
+        $args['headers']['api-key'] = $this->api_key;
+        $args['headers']['Accept']  = 'application/json';
+
+        $response    = wp_remote_get( $url, $args );
+        $duration_ms = (int) round( ( microtime( true ) - $start ) * 1000 );
+
+        if ( is_wp_error( $response ) ) {
+            return $this->locations_error( 0, $this->sanitize_error( $response->get_error_message() ), $duration_ms );
+        }
+
+        $http_status = (int) wp_remote_retrieve_response_code( $response );
+        $body        = wp_remote_retrieve_body( $response );
+
+        if ( 401 === $http_status ) {
+            return $this->locations_error( $http_status, __( 'Authentication failed. Check your ShipStation API key.', 'woocommerce-shipstation-integration-wr' ), $duration_ms );
+        }
+        if ( 403 === $http_status ) {
+            return $this->locations_error( $http_status, __( 'Access forbidden. Confirm your API key has inventory access.', 'woocommerce-shipstation-integration-wr' ), $duration_ms );
+        }
+        if ( 429 === $http_status ) {
+            return $this->locations_error( $http_status, __( 'ShipStation rate limit reached.', 'woocommerce-shipstation-integration-wr' ), $duration_ms );
+        }
+        if ( $http_status >= 500 ) {
+            /* translators: %d HTTP status code */
+            return $this->locations_error( $http_status, sprintf( __( 'ShipStation server error (HTTP %d).', 'woocommerce-shipstation-integration-wr' ), $http_status ), $duration_ms );
+        }
+        if ( 200 !== $http_status ) {
+            /* translators: %d HTTP status code */
+            return $this->locations_error( $http_status, sprintf( __( 'Unexpected HTTP response: %d', 'woocommerce-shipstation-integration-wr' ), $http_status ), $duration_ms );
+        }
+
+        $data = json_decode( $body, true );
+        if ( JSON_ERROR_NONE !== json_last_error() || ! is_array( $data ) ) {
+            return $this->locations_error( $http_status, __( 'Invalid JSON received from ShipStation API.', 'woocommerce-shipstation-integration-wr' ), $duration_ms );
+        }
+
+        // Try all common ShipStation v2 response structures
+        $locations = [];
+
+        // 1. Wrapped with a known key
+        foreach ( [ 'inventory_locations', 'locations', 'results', 'items', 'data' ] as $ck ) {
+            if ( isset( $data[ $ck ] ) && is_array( $data[ $ck ] ) ) {
+                $locations = $data[ $ck ];
+                break;
+            }
+        }
+
+        // 2. Root-level array (response IS the location list)
+        if ( empty( $locations ) && isset( $data[0] ) ) {
+            $locations = $data;
+        }
+
+        // When the response parsed but no locations were found, log the raw body so the
+        // structure can be diagnosed from WC → Status → Logs without another code deploy.
+        if ( empty( $locations ) && function_exists( 'wc_get_logger' ) ) {
+            $structure_keys = implode( ', ', array_keys( $data ) );
+            wc_get_logger()->warning(
+                sprintf(
+                    'inventory_locations_parse_failed: 200_ok top_keys=[%s] body_sample=%s',
+                    $structure_keys,
+                    substr( wp_strip_all_tags( $body ), 0, 600 )
+                ),
+                [ 'source' => 'wsi-wr-shipstation' ]
+            );
+        }
+
+        return [
+            'success'       => true,
+            'locations'     => $locations,
+            'error_message' => '',
+            'http_status'   => $http_status,
+            'duration_ms'   => $duration_ms,
+        ];
+    }
+
+    /**
+     * Sends a single inventory decrement via POST /v2/inventory.
+     *
+     * Always uses 'decrement' transaction_type, never 'adjust'.
+     * 'decrement' is a relative delta — safe when other channels may update concurrently.
+     *
+     * Returns ['success', 'http_status', 'response_body', 'error_message', 'duration_ms'].
+     */
+    public function post_inventory_decrement( array $payload ): array {
+        $start    = microtime( true );
+        $base_url = apply_filters( 'wsi_wr_api_base_url', self::BASE_URL );
+        $timeout  = max( 5, min( 120, (int) apply_filters( 'wsi_wr_api_timeout', 30 ) ) );
+        $url      = rtrim( $base_url, '/' ) . self::INVENTORY_ENDPOINT;
+
+        $args = [
+            'timeout'    => $timeout,
+            'user-agent' => 'WooCommerce ShipStation Integration WR/' . WSI_WR_VERSION,
+            'headers'    => [
+                'api-key'      => $this->api_key,
+                'Content-Type' => 'application/json',
+                'Accept'       => 'application/json',
+            ],
+            'body' => wp_json_encode( $payload ),
+        ];
+
+        $response    = wp_remote_post( $url, $args );
+        $duration_ms = (int) round( ( microtime( true ) - $start ) * 1000 );
+
+        if ( is_wp_error( $response ) ) {
+            return [
+                'success'       => false,
+                'http_status'   => 0,
+                'response_body' => '',
+                'error_message' => $this->sanitize_error( $response->get_error_message() ),
+                'duration_ms'   => $duration_ms,
+            ];
+        }
+
+        $http_status   = (int) wp_remote_retrieve_response_code( $response );
+        $response_body = wp_remote_retrieve_body( $response );
+
+        if ( in_array( $http_status, [ 200, 201, 204 ], true ) ) {
+            return [
+                'success'       => true,
+                'http_status'   => $http_status,
+                'response_body' => $response_body,
+                'error_message' => '',
+                'duration_ms'   => $duration_ms,
+            ];
+        }
+
+        $error_msg = '';
+        if ( 401 === $http_status ) {
+            $error_msg = __( 'Authentication failed. Check your ShipStation API key.', 'woocommerce-shipstation-integration-wr' );
+        } elseif ( 403 === $http_status ) {
+            $error_msg = __( 'Access forbidden. Confirm your API key has inventory write access.', 'woocommerce-shipstation-integration-wr' );
+        } elseif ( 429 === $http_status ) {
+            $error_msg = __( 'ShipStation rate limit reached.', 'woocommerce-shipstation-integration-wr' );
+        } elseif ( $http_status >= 500 ) {
+            /* translators: %d HTTP status code */
+            $error_msg = sprintf( __( 'ShipStation server error (HTTP %d).', 'woocommerce-shipstation-integration-wr' ), $http_status );
+        } else {
+            /* translators: %d HTTP status code */
+            $error_msg = sprintf( __( 'Unexpected HTTP response: %d', 'woocommerce-shipstation-integration-wr' ), $http_status );
+        }
+
+        return [
+            'success'       => false,
+            'http_status'   => $http_status,
+            'response_body' => $response_body,
+            'error_message' => $error_msg,
+            'duration_ms'   => $duration_ms,
+        ];
+    }
+
+    private function locations_error( int $http_status, string $message, int $duration_ms = 0 ): array {
+        return [
+            'success'       => false,
+            'locations'     => [],
+            'error_message' => $message,
+            'http_status'   => $http_status,
+            'duration_ms'   => $duration_ms,
         ];
     }
 

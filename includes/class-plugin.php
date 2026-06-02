@@ -28,6 +28,8 @@ class Plugin {
         require_once WSI_WR_PLUGIN_DIR . 'includes/sync/class-tracked-sku-registry.php';
         require_once WSI_WR_PLUGIN_DIR . 'includes/sync/class-order-protection.php';
         require_once WSI_WR_PLUGIN_DIR . 'includes/sync/class-sync-service.php';
+        require_once WSI_WR_PLUGIN_DIR . 'includes/export/class-inventory-location-service.php';
+        require_once WSI_WR_PLUGIN_DIR . 'includes/export/class-inventory-export-service.php';
         require_once WSI_WR_PLUGIN_DIR . 'includes/admin/class-integration.php';
         require_once WSI_WR_PLUGIN_DIR . 'includes/admin/class-ajax-handlers.php';
         require_once WSI_WR_PLUGIN_DIR . 'includes/admin/class-admin-pages.php';
@@ -44,6 +46,12 @@ class Plugin {
         add_action( 'woocommerce_update_options_integration_wsi_wr_shipstation', [ Scheduler\Scheduler::class, 'schedule' ] );
         add_filter( 'wsi_wr_api_page_size', fn() => (int) Admin\Integration::get_setting( 'page_size', 100 ) );
         add_filter( 'wsi_wr_api_timeout', fn() => (int) Admin\Integration::get_setting( 'request_timeout', 30 ) );
+
+        // Export: WooCommerce → ShipStation inventory decrement on payment confirmation
+        $export_service = new Export\Inventory_Export_Service();
+        add_action( 'woocommerce_payment_complete',        [ $export_service, 'handle_payment_complete' ], 10, 1 );
+        add_action( 'woocommerce_order_status_processing', [ $export_service, 'handle_status_fallback' ],  20, 2 );
+        add_action( 'woocommerce_order_status_completed',  [ $export_service, 'handle_status_fallback' ],  20, 2 );
     }
 
     public function load_textdomain(): void {
@@ -88,42 +96,48 @@ class Plugin {
         $localize = [
             'ajax_url' => admin_url( 'admin-ajax.php' ),
             'nonces'   => [
-                'test_connection' => wp_create_nonce( 'wsi_wr_test_connection' ),
-                'fetch_sample'    => wp_create_nonce( 'wsi_wr_fetch_inventory_sample' ),
+                'test_connection'    => wp_create_nonce( 'wsi_wr_test_connection' ),
+                'fetch_sample'       => wp_create_nonce( 'wsi_wr_fetch_inventory_sample' ),
+                'refresh_locations'  => wp_create_nonce( 'wsi_wr_refresh_inventory_locations' ),
             ],
             'strings'  => [
-                'test_connection_label'     => __( 'Test Connection', 'woocommerce-shipstation-integration-wr' ),
-                'fetch_sample_label'        => __( 'Fetch Inventory Sample', 'woocommerce-shipstation-integration-wr' ),
-                'run_report_label'          => __( 'Run SKU Alignment Report', 'woocommerce-shipstation-integration-wr' ),
-                'testing'                   => __( 'Testing…', 'woocommerce-shipstation-integration-wr' ),
-                'fetching'                  => __( 'Fetching…', 'woocommerce-shipstation-integration-wr' ),
-                'running'                   => __( 'Running…', 'woocommerce-shipstation-integration-wr' ),
-                'saving'                    => __( 'Saving…', 'woocommerce-shipstation-integration-wr' ),
-                'success'                   => __( 'Success:', 'woocommerce-shipstation-integration-wr' ),
-                'error'                     => __( 'Error:', 'woocommerce-shipstation-integration-wr' ),
-                'request_failed'            => __( 'Request failed. Check your browser console and try again.', 'woocommerce-shipstation-integration-wr' ),
-                'available_field_confirmed' => __( 'Available field confirmed in response', 'woocommerce-shipstation-integration-wr' ),
-                'total_records'             => __( 'Total records in ShipStation', 'woocommerce-shipstation-integration-wr' ),
-                'showing'                   => __( 'Showing', 'woocommerce-shipstation-integration-wr' ),
-                'records'                   => __( 'records', 'woocommerce-shipstation-integration-wr' ),
-                'page_label'                => __( 'Page', 'woocommerce-shipstation-integration-wr' ),
-                'no_records'                => __( 'No inventory records returned.', 'woocommerce-shipstation-integration-wr' ),
-                'on_hand'                   => __( 'On Hand', 'woocommerce-shipstation-integration-wr' ),
-                'available'                 => __( 'Available (sync target)', 'woocommerce-shipstation-integration-wr' ),
-                'download_csv'              => __( 'Download CSV', 'woocommerce-shipstation-integration-wr' ),
-                'pagination_incomplete'     => __( '⚠ Pagination did not complete — report may be partial.', 'woocommerce-shipstation-integration-wr' ),
-                'sku_col'                   => __( 'SKU', 'woocommerce-shipstation-integration-wr' ),
-                'product_id_col'            => __( 'WC Product ID', 'woocommerce-shipstation-integration-wr' ),
-                'current_stock_col'         => __( 'WC Stock', 'woocommerce-shipstation-integration-wr' ),
-                'ss_available_col'          => __( 'SS Available', 'woocommerce-shipstation-integration-wr' ),
-                'ss_on_hand_col'            => __( 'SS On Hand', 'woocommerce-shipstation-integration-wr' ),
-                'notes_col'                 => __( 'Notes', 'woocommerce-shipstation-integration-wr' ),
-                'approve_label'             => __( 'Add / Approve SKU', 'woocommerce-shipstation-integration-wr' ),
-                'reload_page'               => __( 'Page will reload to show updated registry.', 'woocommerce-shipstation-integration-wr' ),
-                'run_dry_run_label'         => __( 'Run Dry-Run Sync', 'woocommerce-shipstation-integration-wr' ),
-                'run_manual_sync_label'     => __( 'Run Manual Sync', 'woocommerce-shipstation-integration-wr' ),
-                'proposed_stock_col'        => __( 'Proposed Stock', 'woocommerce-shipstation-integration-wr' ),
-                'new_stock_col'             => __( 'New Stock', 'woocommerce-shipstation-integration-wr' ),
+                'test_connection_label'       => __( 'Test Connection', 'woocommerce-shipstation-integration-wr' ),
+                'fetch_sample_label'          => __( 'Fetch Inventory Sample', 'woocommerce-shipstation-integration-wr' ),
+                'run_report_label'            => __( 'Run SKU Alignment Report', 'woocommerce-shipstation-integration-wr' ),
+                'testing'                     => __( 'Testing…', 'woocommerce-shipstation-integration-wr' ),
+                'fetching'                    => __( 'Fetching…', 'woocommerce-shipstation-integration-wr' ),
+                'running'                     => __( 'Running…', 'woocommerce-shipstation-integration-wr' ),
+                'saving'                      => __( 'Saving…', 'woocommerce-shipstation-integration-wr' ),
+                'success'                     => __( 'Success:', 'woocommerce-shipstation-integration-wr' ),
+                'error'                       => __( 'Error:', 'woocommerce-shipstation-integration-wr' ),
+                'request_failed'              => __( 'Request failed. Check your browser console and try again.', 'woocommerce-shipstation-integration-wr' ),
+                'available_field_confirmed'   => __( 'Available field confirmed in response', 'woocommerce-shipstation-integration-wr' ),
+                'total_records'               => __( 'Total records in ShipStation', 'woocommerce-shipstation-integration-wr' ),
+                'showing'                     => __( 'Showing', 'woocommerce-shipstation-integration-wr' ),
+                'records'                     => __( 'records', 'woocommerce-shipstation-integration-wr' ),
+                'page_label'                  => __( 'Page', 'woocommerce-shipstation-integration-wr' ),
+                'no_records'                  => __( 'No inventory records returned.', 'woocommerce-shipstation-integration-wr' ),
+                'on_hand'                     => __( 'On Hand', 'woocommerce-shipstation-integration-wr' ),
+                'available'                   => __( 'Available (sync target)', 'woocommerce-shipstation-integration-wr' ),
+                'download_csv'                => __( 'Download CSV', 'woocommerce-shipstation-integration-wr' ),
+                'pagination_incomplete'       => __( '⚠ Pagination did not complete — report may be partial.', 'woocommerce-shipstation-integration-wr' ),
+                'sku_col'                     => __( 'SKU', 'woocommerce-shipstation-integration-wr' ),
+                'product_id_col'              => __( 'WC Product ID', 'woocommerce-shipstation-integration-wr' ),
+                'current_stock_col'           => __( 'WC Stock', 'woocommerce-shipstation-integration-wr' ),
+                'ss_available_col'            => __( 'SS Available', 'woocommerce-shipstation-integration-wr' ),
+                'ss_on_hand_col'              => __( 'SS On Hand', 'woocommerce-shipstation-integration-wr' ),
+                'notes_col'                   => __( 'Notes', 'woocommerce-shipstation-integration-wr' ),
+                'approve_label'               => __( 'Add / Approve SKU', 'woocommerce-shipstation-integration-wr' ),
+                'reload_page'                 => __( 'Page will reload to show updated registry.', 'woocommerce-shipstation-integration-wr' ),
+                'run_dry_run_label'           => __( 'Run Dry-Run Sync', 'woocommerce-shipstation-integration-wr' ),
+                'run_manual_sync_label'       => __( 'Run Manual Sync', 'woocommerce-shipstation-integration-wr' ),
+                'proposed_stock_col'          => __( 'Proposed Stock', 'woocommerce-shipstation-integration-wr' ),
+                'new_stock_col'               => __( 'New Stock', 'woocommerce-shipstation-integration-wr' ),
+                'refresh_locations_label'     => __( 'Refresh ShipStation Inventory Locations', 'woocommerce-shipstation-integration-wr' ),
+                'refreshing_locations'        => __( 'Refreshing…', 'woocommerce-shipstation-integration-wr' ),
+                'no_locations_found'          => __( 'No inventory locations returned from ShipStation.', 'woocommerce-shipstation-integration-wr' ),
+                'location_auto_selected'      => __( 'Location auto-selected (only one available). Save settings to confirm.', 'woocommerce-shipstation-integration-wr' ),
+                'select_location_placeholder' => __( '— Select a location —', 'woocommerce-shipstation-integration-wr' ),
             ],
         ];
 

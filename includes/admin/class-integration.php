@@ -2,6 +2,8 @@
 
 namespace WebReadyNow\WooCommerceShipStationIntegration\Admin;
 
+use WebReadyNow\WooCommerceShipStationIntegration\Export\Inventory_Location_Service;
+
 defined( 'ABSPATH' ) || exit;
 
 class Integration extends \WC_Integration {
@@ -225,6 +227,37 @@ class Integration extends \WC_Integration {
                 ],
             ],
 
+            // ── ShipStation Inventory Export (WooCommerce → ShipStation) ────────
+
+            'export_section' => [
+                'title'       => __( 'ShipStation Inventory Export (WooCommerce → ShipStation)', 'woocommerce-shipstation-integration-wr' ),
+                'type'        => 'title',
+                'description' => __( 'When a WooCommerce order payment is confirmed, this feature sends a decrement to ShipStation so its inventory reflects the sale. Uses the <code>decrement</code> transaction type — never <code>adjust</code> — so concurrent channel activity is not overwritten.', 'woocommerce-shipstation-integration-wr' ),
+            ],
+
+            'export_double_decrement_warning' => [
+                'title'       => __( 'Important Warning', 'woocommerce-shipstation-integration-wr' ),
+                'type'        => 'info',
+                'description' => __( '<strong>Only enable live decrement after confirming ShipStation is not already deducting inventory for WooCommerce orders.</strong> Enabling live mode while ShipStation also deducts inventory can cause double inventory reduction.', 'woocommerce-shipstation-integration-wr' ),
+            ],
+
+            'export_decrement_mode' => [
+                'title'       => __( 'Export Decrement Mode', 'woocommerce-shipstation-integration-wr' ),
+                'type'        => 'select',
+                'description' => __( 'Controls whether paid WooCommerce orders trigger a ShipStation inventory decrement. Start with Dry Run to verify logging before enabling Live.', 'woocommerce-shipstation-integration-wr' ),
+                'default'     => 'disabled',
+                'options'     => [
+                    'disabled' => __( 'Disabled — no ShipStation decrement calls (default)', 'woocommerce-shipstation-integration-wr' ),
+                    'dry_run'  => __( 'Dry Run — log what would be sent without calling the ShipStation API', 'woocommerce-shipstation-integration-wr' ),
+                    'live'     => __( 'Live — send actual decrement calls to ShipStation on payment confirmation', 'woocommerce-shipstation-integration-wr' ),
+                ],
+            ],
+
+            'export_location_tools' => [
+                'title' => __( 'Inventory Location', 'woocommerce-shipstation-integration-wr' ),
+                'type'  => 'export_location_tools',
+            ],
+
         ];
     }
 
@@ -399,6 +432,133 @@ class Integration extends \WC_Integration {
     }
 
     public function validate_connection_tools_field( string $key, $value ): string {
+        return '';
+    }
+
+    // ── Export section: select field ─────────────────────────────────────────
+
+    public function validate_export_decrement_mode_field( string $key, $value ): string {
+        $allowed = [ 'disabled', 'dry_run', 'live' ];
+        $value   = sanitize_text_field( (string) $value );
+        return in_array( $value, $allowed, true ) ? $value : 'disabled';
+    }
+
+    // ── Export section: custom location tools field ───────────────────────────
+
+    /**
+     * Renders the inventory location select + refresh button.
+     * The select submits via the standard WC settings form save.
+     * The refresh button triggers an AJAX call to fetch/cache locations without a full form save.
+     */
+    public function generate_export_location_tools_html( string $key, array $data ): string {
+        $location_service = new Inventory_Location_Service();
+        $cached_locations = $location_service->get_cached_locations();
+        $selected_id      = $location_service->get_selected_location_id();
+        $selected_name    = $location_service->get_selected_location_name();
+        $current_mode     = self::get_setting( 'export_decrement_mode', 'disabled' );
+
+        ob_start();
+        ?>
+        <tr valign="top">
+            <th scope="row" class="titledesc">
+                <label><?php esc_html_e( 'Inventory Location', 'woocommerce-shipstation-integration-wr' ); ?></label>
+            </th>
+            <td class="forminp">
+
+                <?php if ( empty( $cached_locations ) ) : ?>
+                    <div class="notice notice-warning inline wsi-wr-export-notice"><p>
+                        <?php esc_html_e( 'No inventory locations are loaded. Click "Refresh ShipStation Inventory Locations" to fetch available locations from ShipStation.', 'woocommerce-shipstation-integration-wr' ); ?>
+                    </p></div>
+                <?php elseif ( 'live' === $current_mode && '' === $selected_id ) : ?>
+                    <div class="notice notice-error inline wsi-wr-export-notice"><p>
+                        <?php esc_html_e( 'Live export mode is active but no inventory location is selected. Decrement calls will not be sent until a location is selected and settings are saved.', 'woocommerce-shipstation-integration-wr' ); ?>
+                    </p></div>
+                <?php elseif ( count( $cached_locations ) > 1 && '' === $selected_id ) : ?>
+                    <div class="notice notice-warning inline wsi-wr-export-notice"><p>
+                        <?php esc_html_e( 'Multiple inventory locations are available. Select one before enabling live export mode.', 'woocommerce-shipstation-integration-wr' ); ?>
+                    </p></div>
+                <?php endif; ?>
+
+                <p>
+                    <select
+                        name="wsi_wr_export_location_select"
+                        id="wsi-wr-export-location-select"
+                        class="wc-enhanced-select"
+                        style="min-width: 350px;"
+                    >
+                        <option value=""><?php esc_html_e( '— Select a location —', 'woocommerce-shipstation-integration-wr' ); ?></option>
+                        <?php foreach ( $cached_locations as $loc ) : ?>
+                            <option
+                                value="<?php echo esc_attr( $loc['inventory_location_id'] ); ?>"
+                                <?php selected( $selected_id, $loc['inventory_location_id'] ); ?>
+                            >
+                                <?php echo esc_html(
+                                    ( $loc['name'] !== '' ? $loc['name'] : $loc['inventory_location_id'] )
+                                    . ' — ' . $loc['inventory_location_id']
+                                ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </p>
+
+                <?php if ( '' !== $selected_id ) : ?>
+                    <p class="description">
+                        <?php
+                        echo wp_kses_post( sprintf(
+                            /* translators: 1: location name 2: location ID */
+                            __( 'Currently selected: <strong>%1$s</strong> &mdash; ID: <code>%2$s</code>', 'woocommerce-shipstation-integration-wr' ),
+                            esc_html( $selected_name ),
+                            esc_html( $selected_id )
+                        ) );
+                        ?>
+                    </p>
+                <?php endif; ?>
+
+                <p>
+                    <button
+                        type="button"
+                        id="wsi-wr-refresh-locations"
+                        class="button button-secondary"
+                    ><?php esc_html_e( 'Refresh ShipStation Inventory Locations', 'woocommerce-shipstation-integration-wr' ); ?></button>
+                </p>
+                <div id="wsi-wr-refresh-locations-result" class="wsi-wr-tool-result"></div>
+
+                <p class="description">
+                    <?php esc_html_e( 'Select the ShipStation inventory location to deduct from when a WooCommerce order is paid. If only one location exists, it is auto-selected on first refresh. Save settings after selecting a location.', 'woocommerce-shipstation-integration-wr' ); ?>
+                </p>
+                <p class="description">
+                    <?php esc_html_e( 'This plugin dynamically fetches locations from ShipStation and does not hardcode any location ID. Use the refresh button to discover locations for any ShipStation account.', 'woocommerce-shipstation-integration-wr' ); ?>
+                </p>
+            </td>
+        </tr>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Saves the selected inventory location ID from the form dropdown.
+     * Reads a custom POST field (not the WC settings array field) and stores it in a separate option.
+     * Returns '' so nothing is stored in the main settings array for this field.
+     */
+    public function validate_export_location_tools_field( string $key, $value ): string {
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified by WC_Integration framework before this runs
+        if ( ! isset( $_POST['wsi_wr_export_location_select'] ) ) {
+            return '';
+        }
+
+        $location_id      = sanitize_text_field( trim( wp_unslash( (string) $_POST['wsi_wr_export_location_select'] ) ) );
+        $location_service = new Inventory_Location_Service();
+
+        if ( '' === $location_id ) {
+            update_option( Inventory_Location_Service::SELECTED_LOCATION_OPTION, '' );
+        } else {
+            $cached    = $location_service->get_cached_locations();
+            $valid_ids = array_column( $cached, 'inventory_location_id' );
+            if ( in_array( $location_id, $valid_ids, true ) ) {
+                $location_service->set_selected_location_id( $location_id );
+            }
+        }
+
         return '';
     }
 }

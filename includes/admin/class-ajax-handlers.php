@@ -7,6 +7,7 @@ use WebReadyNow\WooCommerceShipStationIntegration\Utilities\Logger;
 use WebReadyNow\WooCommerceShipStationIntegration\Sync\Product_Matcher;
 use WebReadyNow\WooCommerceShipStationIntegration\Sync\Sync_Service;
 use WebReadyNow\WooCommerceShipStationIntegration\Sync\Tracked_SKU_Registry;
+use WebReadyNow\WooCommerceShipStationIntegration\Export\Inventory_Location_Service;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -19,7 +20,8 @@ class Ajax_Handlers {
         add_action( 'wp_ajax_wsi_wr_toggle_tracked_sku',      [ __CLASS__, 'toggle_tracked_sku' ] );
         add_action( 'wp_ajax_wsi_wr_approve_tracked_sku',     [ __CLASS__, 'approve_tracked_sku' ] );
         add_action( 'wp_ajax_wsi_wr_run_dry_run',             [ __CLASS__, 'run_dry_run' ] );
-        add_action( 'wp_ajax_wsi_wr_run_manual_sync',         [ __CLASS__, 'run_manual_sync' ] );
+        add_action( 'wp_ajax_wsi_wr_run_manual_sync',              [ __CLASS__, 'run_manual_sync' ] );
+        add_action( 'wp_ajax_wsi_wr_refresh_inventory_locations',  [ __CLASS__, 'refresh_inventory_locations' ] );
     }
 
     public static function test_connection(): void {
@@ -567,6 +569,43 @@ class Ajax_Handlers {
                     'reason'                => $item['reason'],
                 ];
             }, $eval_results ),
+        ] );
+    }
+
+    // ── Export handlers ───────────────────────────────────────────────────────
+
+    public static function refresh_inventory_locations(): void {
+        check_ajax_referer( 'wsi_wr_refresh_inventory_locations', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error(
+                [ 'message' => __( 'You do not have permission to perform this action.', 'woocommerce-shipstation-integration-wr' ) ],
+                403
+            );
+        }
+
+        $location_service = new Inventory_Location_Service();
+        $result           = $location_service->fetch_and_cache();
+
+        if ( ! $result['success'] ) {
+            wp_send_json_error( [ 'message' => $result['error_message'] ] );
+        }
+
+        $locations = $result['locations'];
+        $count     = count( $locations );
+
+        if ( 0 === $count ) {
+            wp_send_json_error( [
+                'message' => __( 'ShipStation returned 0 inventory locations. Check WooCommerce → Status → Logs (source: wsi-wr-shipstation) for the raw response structure.', 'woocommerce-shipstation-integration-wr' ),
+            ] );
+        }
+
+        wp_send_json_success( [
+            'locations'            => $locations,
+            'selected_location_id' => $location_service->get_selected_location_id(),
+            'auto_selected'        => $result['auto_selected'],
+            /* translators: %d number of locations found */
+            'message'              => sprintf( _n( '%d inventory location loaded.', '%d inventory locations loaded.', $count, 'woocommerce-shipstation-integration-wr' ), $count ),
         ] );
     }
 
