@@ -177,6 +177,26 @@ class Inventory_Export_Service {
 				continue;
 			}
 
+			$allowlist = Integration::get_export_sku_allowlist();
+			if ( ! empty( $allowlist ) && ! in_array( $sku, $allowlist, true ) ) {
+				$item_results[ $item_id_int ] = [ 'status' => 'skipped_not_in_allowlist', 'sku' => $sku, 'qty' => 0 ];
+				$order->update_meta_data( self::ITEM_META_PREFIX . $item_id_int, 'skipped_not_in_allowlist' );
+				$this->log_export_event( [
+					'trigger'      => $trigger,
+					'order_id'     => $order_id,
+					'order_number' => $order_number,
+					'line_item_id' => $item_id_int,
+					'product_id'   => $product_id,
+					'variation_id' => $variation_id,
+					'sku'          => $sku,
+					'mode'         => $mode,
+					'location_id'  => $location_id,
+					'outcome'      => 'skipped_not_in_allowlist',
+					'skip_reason'  => 'sku_not_in_export_allowlist',
+				] );
+				continue;
+			}
+
 			$qty = (int) $item->get_quantity();
 
 			if ( $qty <= 0 ) {
@@ -362,6 +382,8 @@ class Inventory_Export_Service {
 				$outcome = 'skipped — invalid quantity';
 			} elseif ( 'skipped_already_processed' === $status ) {
 				$outcome = 'skipped — already processed';
+			} elseif ( 'skipped_not_in_allowlist' === $status ) {
+				$outcome = 'skipped — not in export allowlist';
 			} else {
 				$outcome = sprintf( 'skipped (%s)', $status );
 			}

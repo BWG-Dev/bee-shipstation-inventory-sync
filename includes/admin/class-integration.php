@@ -253,6 +253,14 @@ class Integration extends \WC_Integration {
                 ],
             ],
 
+            'export_sku_allowlist' => [
+                'title'       => __( 'Export SKU Allowlist', 'woocommerce-shipstation-integration-wr' ),
+                'type'        => 'textarea',
+                'description' => __( 'One SKU per line. When this list is non-empty, only SKUs listed here will be sent to ShipStation on payment — all other SKUs are skipped and logged. Leave blank to send all SKUs (default). Use during live testing to limit decrements to specific products.', 'woocommerce-shipstation-integration-wr' ),
+                'default'     => '',
+                'css'         => 'min-height: 100px; font-family: monospace; width: 350px;',
+            ],
+
             'export_location_tools' => [
                 'title' => __( 'Inventory Location', 'woocommerce-shipstation-integration-wr' ),
                 'type'  => 'export_location_tools',
@@ -441,6 +449,38 @@ class Integration extends \WC_Integration {
         $allowed = [ 'disabled', 'dry_run', 'live' ];
         $value   = sanitize_text_field( (string) $value );
         return in_array( $value, $allowed, true ) ? $value : 'disabled';
+    }
+
+    public function validate_export_sku_allowlist_field( string $key, $value ): string {
+        $lines = preg_split( '/[\r\n]+/', sanitize_textarea_field( trim( (string) $value ) ) );
+        $skus  = [];
+        foreach ( $lines as $line ) {
+            $sku = trim( $line );
+            if ( '' !== $sku ) {
+                $skus[] = $sku;
+            }
+        }
+        return implode( "\n", array_unique( $skus ) );
+    }
+
+    /**
+     * Returns the export SKU allowlist as an array.
+     * Empty array means no restriction — all SKUs are eligible for export.
+     */
+    public static function get_export_sku_allowlist(): array {
+        $raw = self::get_setting( 'export_sku_allowlist', '' );
+        if ( '' === $raw ) {
+            return [];
+        }
+        $lines = preg_split( '/[\r\n]+/', $raw );
+        $skus  = [];
+        foreach ( $lines as $line ) {
+            $sku = trim( $line );
+            if ( '' !== $sku ) {
+                $skus[] = $sku;
+            }
+        }
+        return array_unique( $skus );
     }
 
     // ── Export section: custom location tools field ───────────────────────────
