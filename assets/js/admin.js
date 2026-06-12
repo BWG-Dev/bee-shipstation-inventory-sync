@@ -35,6 +35,10 @@
                 $('#wsi-wr-approve-sku-btn').on('click', WSI_WR.approveSku);
                 $(document).on('click', '.wsi-wr-toggle-sync', WSI_WR.toggleTrackedSku);
             }
+
+            if ($('#wsi-wr-run-order-diagnostic').length) {
+                $('#wsi-wr-run-order-diagnostic').on('click', WSI_WR.runOrderDiagnostic);
+            }
         },
 
         testConnection: function (e) {
@@ -719,6 +723,115 @@
             .always(function () {
                 $btn.prop('disabled', false).text(strings.refresh_locations_label);
             });
+        },
+
+        // ── Order Diagnostic ─────────────────────────────────────────────────
+
+        runOrderDiagnostic: function (e) {
+            e.preventDefault();
+
+            var $btn     = $(this);
+            var $spinner = $('#wsi-wr-diag-spinner');
+            var $notice  = $('#wsi-wr-diag-notice');
+            var $results = $('#wsi-wr-diag-results');
+            var strings  = WSI_WR_Admin.strings;
+            var sku      = $.trim($('#wsi-wr-diag-sku').val());
+            var since    = $.trim($('#wsi-wr-diag-since').val());
+
+            $notice.removeClass('notice notice-success notice-error').empty();
+            $results.hide().find('#wsi-wr-diag-summary, #wsi-wr-diag-pending-wrap, #wsi-wr-diag-all-wrap').empty();
+
+            if (!sku) {
+                $notice.addClass('notice notice-error').html('<p>SKU is required.</p>');
+                return;
+            }
+            if (!since) {
+                $notice.addClass('notice notice-error').html('<p>Please select a since-date.</p>');
+                return;
+            }
+
+            $btn.prop('disabled', true).text(strings.running);
+            $spinner.css('visibility', 'visible');
+
+            $.post(WSI_WR_Admin.ajax_url, {
+                action:     'wsi_wr_run_order_diagnostic',
+                nonce:      WSI_WR_Admin.nonces.order_diagnostic,
+                sku:        sku,
+                since_date: since
+            })
+            .done(function (response) {
+                if (!response.success) {
+                    $notice.addClass('notice notice-error').html(
+                        '<p><strong>' + escHtml(strings.error) + '</strong> ' + escHtml(response.data.message) + '</p>'
+                    );
+                    return;
+                }
+
+                var d = response.data;
+
+                // Summary box
+                var $sum = $('#wsi-wr-diag-summary');
+                $sum.html(
+                    '<ul>' +
+                    '<li>SKU: <strong>' + escHtml(d.sku) + '</strong> (WC product ID: ' + escHtml(d.product_id) + ')</li>' +
+                    '<li>Window: <strong>' + escHtml(d.since_date) + '</strong> to now (server time)</li>' +
+                    '<li><strong>' + escHtml(d.total_units) + '</strong> total units in non-cancelled orders</li>' +
+                    '<li><strong class="wsi-wr-applied">' + escHtml(d.pending_units) + '</strong> units awaiting shipment (processing / on-hold)</li>' +
+                    '</ul>'
+                );
+
+                // Pending orders table
+                var $pendingWrap = $('#wsi-wr-diag-pending-wrap');
+                if (d.pending_orders.length === 0) {
+                    $pendingWrap.html('<p><em>No orders currently awaiting shipment.</em></p>');
+                } else {
+                    $pendingWrap.append(WSI_WR.buildOrderTable(d.pending_orders));
+                }
+
+                // All orders table
+                var $allWrap = $('#wsi-wr-diag-all-wrap');
+                if (d.all_orders.length === 0) {
+                    $allWrap.html('<p><em>No orders found in this window.</em></p>');
+                } else {
+                    $allWrap.append(WSI_WR.buildOrderTable(d.all_orders));
+                }
+
+                $results.show();
+            })
+            .fail(function () {
+                $notice.addClass('notice notice-error').html(
+                    '<p>' + escHtml(strings.request_failed) + '</p>'
+                );
+            })
+            .always(function () {
+                $btn.prop('disabled', false).text('Run Diagnostic');
+                $spinner.css('visibility', 'hidden');
+            });
+        },
+
+        buildOrderTable: function (orders) {
+            var $tbl = $('<table class="wsi-wr-result-table widefat striped">');
+            $tbl.append(
+                '<thead><tr>' +
+                '<th>Order #</th>' +
+                '<th>Date</th>' +
+                '<th>Status</th>' +
+                '<th>Units</th>' +
+                '</tr></thead>'
+            );
+            var $tbody = $('<tbody>');
+            $.each(orders, function (i, row) {
+                $tbody.append(
+                    '<tr>' +
+                    '<td><strong>#' + escHtml(row.order_id) + '</strong></td>' +
+                    '<td>' + escHtml(row.date) + '</td>' +
+                    '<td>' + escHtml(row.status) + '</td>' +
+                    '<td><strong>' + escHtml(row.qty) + '</strong></td>' +
+                    '</tr>'
+                );
+            });
+            $tbl.append($tbody);
+            return $tbl;
         },
 
         approveSku: function (e) {

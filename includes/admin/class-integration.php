@@ -13,7 +13,7 @@ class Integration extends \WC_Integration {
 
     public function __construct() {
         $this->id                 = 'wsi_wr_shipstation';
-        $this->method_title       = __( 'ShipStation Integration WR', 'woocommerce-shipstation-integration-wr' );
+        $this->method_title       = __( 'ShipStation Integration', 'woocommerce-shipstation-integration-wr' );
         $this->method_description = __( 'Controlled ShipStation inventory pull for WooCommerce. Retrieves inventory from ShipStation on a schedule and updates product stock by exact SKU match.', 'woocommerce-shipstation-integration-wr' );
 
         $this->init_form_fields();
