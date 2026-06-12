@@ -87,7 +87,10 @@ class Order_Diagnostic {
 
                 <?php if ( isset( $result['error'] ) ) : ?>
                     <div class="notice notice-error"><p><?php echo esc_html( $result['error'] ); ?></p></div>
-                <?php else : ?>
+                <?php elseif ( ! empty( $result['truncated'] ) ) : ?>
+                    <div class="notice notice-warning"><p><?php esc_html_e( 'More than 500 orders match this window. Only the first 500 are shown. Narrow the date range for a complete view.', 'woocommerce-shipstation-integration-wr' ); ?></p></div>
+                <?php endif; ?>
+                <?php if ( ! isset( $result['error'] ) ) : ?>
 
                     <div class="wsi-wr-summary-box" style="margin-bottom:20px;">
                         <ul>
@@ -113,6 +116,8 @@ class Order_Diagnostic {
     private function run_query( string $sku, string $since_datetime ): array {
         global $wpdb;
 
+        $max_orders = 500;
+
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $product_id = (int) $wpdb->get_var(
             $wpdb->prepare(
@@ -125,6 +130,7 @@ class Order_Diagnostic {
             return [ 'error' => sprintf( __( 'No WooCommerce product found with SKU: %s', 'woocommerce-shipstation-integration-wr' ), $sku ) ];
         }
 
+        // Fetch one extra row to detect truncation without a separate COUNT query.
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results(
             $wpdb->prepare(
@@ -132,13 +138,20 @@ class Order_Diagnostic {
                  FROM {$wpdb->prefix}wc_order_product_lookup
                  WHERE ( product_id = %d OR variation_id = %d )
                    AND date_created >= %s
-                 GROUP BY order_id",
+                 GROUP BY order_id
+                 LIMIT %d",
                 $product_id,
                 $product_id,
-                $since_datetime
+                $since_datetime,
+                $max_orders + 1
             ),
             ARRAY_A
         );
+
+        $truncated = count( $rows ) > $max_orders;
+        if ( $truncated ) {
+            $rows = array_slice( $rows, 0, $max_orders );
+        }
 
         if ( empty( $rows ) ) {
             return [
@@ -149,6 +162,7 @@ class Order_Diagnostic {
                 'pending_units'  => 0,
                 'all_orders'     => [],
                 'pending_orders' => [],
+                'truncated'      => false,
             ];
         }
 
@@ -158,43 +172,75 @@ class Order_Diagnostic {
         }
         $all_order_ids = array_keys( $order_qty_map );
 
-        $sold_ids = wc_get_orders( [
-            'include' => $all_order_ids,
-            'status'  => [ 'completed', 'processing', 'on-hold', 'refunded', 'pending' ],
-            'limit'   => -1,
-            'return'  => 'ids',
-            'type'    => 'shop_order',
-        ] );
+        // Fetch status + date for all orders in one SQL query instead of loading
+        // full WC_Order objects, which exhausts memory on large result sets.
+        $in_placeholders = implode( ',', array_fill( 0, count( $all_order_ids ), '%d' ) );
 
-        $pending_ids    = wc_get_orders( [
-            'include' => $all_order_ids,
-            'status'  => [ 'processing', 'on-hold' ],
-            'limit'   => -1,
-            'return'  => 'ids',
-            'type'    => 'shop_order',
-        ] );
-        $pending_id_set = array_flip( array_map( 'intval', $pending_ids ) );
+        if ( $this->is_hpos_enabled() ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $order_meta = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT id AS order_id, status, date_created_gmt AS date_created
+                     FROM {$wpdb->prefix}wc_orders
+                     WHERE id IN ($in_placeholders)
+                       AND type = 'shop_order'",
+                    ...$all_order_ids
+                ),
+                ARRAY_A
+            );
+        } else {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $order_meta = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT ID AS order_id, post_status AS status, post_date AS date_created
+                     FROM {$wpdb->posts}
+                     WHERE ID IN ($in_placeholders)
+                       AND post_type = 'shop_order'",
+                    ...$all_order_ids
+                ),
+                ARRAY_A
+            );
+        }
+
+        $order_info_map = [];
+        foreach ( $order_meta as $meta ) {
+            $status = $meta['status'];
+            if ( 'wc-' === substr( $status, 0, 3 ) ) {
+                $status = substr( $status, 3 );
+            }
+            $order_info_map[ (int) $meta['order_id'] ] = [
+                'status' => $status,
+                'date'   => $meta['date_created'] ? substr( $meta['date_created'], 0, 16 ) : '?',
+            ];
+        }
+
+        $non_cancelled = [ 'completed', 'processing', 'on-hold', 'refunded', 'pending' ];
+        $pending_set   = [ 'processing', 'on-hold' ];
 
         $total_units    = 0;
         $pending_units  = 0;
         $all_orders     = [];
         $pending_orders = [];
 
-        foreach ( $sold_ids as $oid ) {
-            $qty   = $order_qty_map[ $oid ] ?? 0;
-            $order = wc_get_order( $oid );
-            $total_units += $qty;
+        foreach ( $all_order_ids as $oid ) {
+            $qty  = $order_qty_map[ $oid ] ?? 0;
+            $info = $order_info_map[ $oid ] ?? null;
 
-            $row = [
+            if ( ! $info || ! in_array( $info['status'], $non_cancelled, true ) ) {
+                continue;
+            }
+
+            $total_units += $qty;
+            $row          = [
                 'order_id' => $oid,
                 'qty'      => $qty,
-                'status'   => $order ? $order->get_status() : '?',
-                'date'     => ( $order && $order->get_date_created() ) ? $order->get_date_created()->date( 'Y-m-d H:i' ) : '?',
+                'status'   => $info['status'],
+                'date'     => $info['date'],
             ];
             $all_orders[] = $row;
 
-            if ( isset( $pending_id_set[ $oid ] ) ) {
-                $pending_units += $qty;
+            if ( in_array( $info['status'], $pending_set, true ) ) {
+                $pending_units  += $qty;
                 $pending_orders[] = $row;
             }
         }
@@ -207,7 +253,15 @@ class Order_Diagnostic {
             'pending_units'  => $pending_units,
             'all_orders'     => $all_orders,
             'pending_orders' => $pending_orders,
+            'truncated'      => $truncated,
         ];
+    }
+
+    private function is_hpos_enabled(): bool {
+        if ( class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' ) ) {
+            return \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+        }
+        return false;
     }
 
     private function render_order_table( array $orders, string $empty_message ): void {
