@@ -73,11 +73,11 @@ class Order_Diagnostic {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row"><label for="wsi-wr-diag-since"><?php esc_html_e( 'Paid since', 'woocommerce-shipstation-integration-wr' ); ?></label></th>
+                        <th scope="row"><label for="wsi-wr-diag-since"><?php esc_html_e( 'Orders since', 'woocommerce-shipstation-integration-wr' ); ?></label></th>
                         <td>
                             <input type="datetime-local" id="wsi-wr-diag-since" name="since_date" class="regular-text"
                                 value="<?php echo esc_attr( $default_date ); ?>">
-                            <p class="description"><?php esc_html_e( 'Filters by payment date (when stock was decremented), not order creation date. Use the plugin go-live date/time for reconciliation.', 'woocommerce-shipstation-integration-wr' ); ?></p>
+                            <p class="description"><?php esc_html_e( 'Filters by order creation date. The Paid column shows the actual payment date. For abandoned/recovered orders, set the date further back to catch them.', 'woocommerce-shipstation-integration-wr' ); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -137,7 +137,7 @@ class Order_Diagnostic {
                                 </td>
                             </tr>
                             <tr>
-                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window (paid date)', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window (order created)', 'woocommerce-shipstation-integration-wr' ); ?></td>
                                 <td style="padding:4px 0;">
                                     <strong><?php echo esc_html( $result['since_datetime'] ); ?></strong>
                                     <?php esc_html_e( '→ now', 'woocommerce-shipstation-integration-wr' ); ?>
@@ -170,6 +170,18 @@ class Order_Diagnostic {
                             </tr>
                         </table>
                     </div>
+
+                    <details style="margin-bottom:16px; font-size:12px; color:#50575e;">
+                        <summary style="cursor:pointer; color:#2271b1;"><?php esc_html_e( 'Query debug info', 'woocommerce-shipstation-integration-wr' ); ?></summary>
+                        <table style="margin-top:8px; border-collapse:collapse;">
+                            <?php foreach ( $result['debug'] as $key => $val ) : ?>
+                                <tr>
+                                    <td style="padding:2px 12px 2px 0; font-weight:600; white-space:nowrap;"><?php echo esc_html( $key ); ?></td>
+                                    <td style="padding:2px 0; font-family:monospace;"><?php echo esc_html( (string) $val ); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </table>
+                    </details>
 
                     <h4><?php esc_html_e( 'Orders Awaiting Shipment', 'woocommerce-shipstation-integration-wr' ); ?></h4>
                     <?php $this->render_order_table( $result['pending_orders'], __( 'No orders currently awaiting shipment.', 'woocommerce-shipstation-integration-wr' ) ); ?>
@@ -209,10 +221,10 @@ class Order_Diagnostic {
         $product_type = $product ? $product->get_type() : '—';
         $id_meta_key  = ( $product && $product->is_type( 'variation' ) ) ? '_variation_id' : '_product_id';
 
-        // Convert the local since_datetime to a UTC Unix timestamp for _date_paid comparison
-        // and a UTC datetime string for date_paid_gmt comparison.
+        // Convert local since_datetime to UTC for HPOS (date_created_gmt is UTC).
         $since_ts  = (int) ( new \DateTime( $since_datetime, wp_timezone() ) )->getTimestamp();
         $since_gmt = gmdate( 'Y-m-d H:i:s', $since_ts );
+        // For legacy post_date is local time — use since_datetime directly.
 
         // All-time order count — no date filter — shows scope vs. the window.
         if ( $use_hpos ) {
@@ -249,9 +261,8 @@ class Order_Diagnostic {
             );
         }
 
-        // Windowed query filtered by payment date, not creation date.
-        // Abandoned/recovered orders have an old creation date but a recent payment date —
-        // filtering by date_paid ensures we capture them correctly.
+        // Filter by order creation date in SQL — simple and reliable across all WC versions
+        // and gateway types. Payment date is fetched separately for display and PHP filtering.
         if ( $use_hpos ) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results(
@@ -268,7 +279,7 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->prefix}wc_orders o
                          ON o.id = oi.order_id
                          AND o.type = 'shop_order'
-                         AND COALESCE(o.date_paid_gmt, o.date_created_gmt) >= %s
+                         AND o.date_created_gmt >= %s
                      WHERE oi.order_item_type = 'line_item'
                      GROUP BY oi.order_id
                      LIMIT %d",
@@ -280,7 +291,6 @@ class Order_Diagnostic {
                 ARRAY_A
             );
         } else {
-            // _date_paid is stored as a UTC Unix timestamp in postmeta.
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results(
                 $wpdb->prepare(
@@ -296,22 +306,12 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->posts} p
                          ON p.ID = oi.order_id
                          AND p.post_type = 'shop_order'
-                     LEFT JOIN {$wpdb->postmeta} pm_paid
-                         ON pm_paid.post_id = p.ID
-                         AND pm_paid.meta_key = '_date_paid'
+                         AND p.post_date >= %s
                      WHERE oi.order_item_type = 'line_item'
-                       AND (
-                           ( pm_paid.meta_value IS NOT NULL AND pm_paid.meta_value != ''
-                             AND CAST(pm_paid.meta_value AS UNSIGNED) >= %d )
-                           OR
-                           ( ( pm_paid.meta_value IS NULL OR pm_paid.meta_value = '' )
-                             AND p.post_date >= %s )
-                       )
                      GROUP BY oi.order_id
                      LIMIT %d",
                     $id_meta_key,
                     $product_id,
-                    $since_ts,
                     $since_datetime,
                     $max_orders + 1
                 ),
@@ -319,10 +319,24 @@ class Order_Diagnostic {
             );
         }
 
-        $truncated = count( $rows ) > $max_orders;
+        $truncated  = count( $rows ) > $max_orders;
+        $raw_count  = count( $rows );
+        $last_error = $wpdb->last_error;
         if ( $truncated ) {
             $rows = array_slice( $rows, 0, $max_orders );
         }
+
+        $debug = [
+            'use_hpos'        => $use_hpos ? 'yes' : 'no',
+            'product_id'      => $product_id,
+            'id_meta_key'     => $id_meta_key,
+            'since_local'     => $since_datetime,
+            'since_gmt'       => $since_gmt,
+            'since_ts'        => $since_ts,
+            'all_time_orders' => $all_time_orders,
+            'windowed_rows'   => $raw_count,
+            'db_error'        => $last_error ?: '(none)',
+        ];
 
         $empty_base = [
             'sku'              => $sku,
@@ -340,6 +354,7 @@ class Order_Diagnostic {
             'all_orders'       => [],
             'pending_orders'   => [],
             'truncated'        => false,
+            'debug'            => $debug,
         ];
 
         if ( empty( $rows ) ) {
@@ -480,6 +495,7 @@ class Order_Diagnostic {
             'all_orders'       => $all_orders,
             'pending_orders'   => $pending_orders,
             'truncated'        => $truncated,
+            'debug'            => $debug,
         ];
     }
 
