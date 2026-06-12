@@ -22,7 +22,6 @@ class Order_Diagnostic {
                 $since_raw  = sanitize_text_field( trim( wp_unslash( $_POST['since_date'] ?? '' ) ) );
                 $since_date = str_replace( 'T', ' ', $since_raw );
 
-                // Pad to full MySQL datetime.
                 if ( 10 === strlen( $since_date ) ) {
                     $since_datetime = $since_date . ' 00:00:00';
                 } elseif ( 16 === strlen( $since_date ) ) {
@@ -43,11 +42,19 @@ class Order_Diagnostic {
                 $default_date = $since_raw ?: $default_date;
             }
         }
+
+        $server_time = current_time( 'Y-m-d H:i:s' );
+        $timezone    = wp_timezone_string();
         ?>
         <div class="wsi-wr-report-page">
             <h2><?php esc_html_e( 'Order Diagnostic', 'woocommerce-shipstation-integration-wr' ); ?></h2>
-            <p class="description">
-                <?php esc_html_e( 'Look up WooCommerce order totals for any SKU since a given date and time. Read-only — no data is changed.', 'woocommerce-shipstation-integration-wr' ); ?>
+
+            <p style="font-size:13px; color:#50575e; margin-top:-8px;">
+                <?php esc_html_e( 'Read-only — no data is changed.', 'woocommerce-shipstation-integration-wr' ); ?>
+                &nbsp;|&nbsp;
+                <?php esc_html_e( 'Server time:', 'woocommerce-shipstation-integration-wr' ); ?>
+                <strong><?php echo esc_html( $server_time ); ?></strong>
+                <span style="color:#999;">(<?php echo esc_html( $timezone ); ?>)</span>
             </p>
 
             <?php if ( $error ) : ?>
@@ -87,18 +94,81 @@ class Order_Diagnostic {
 
                 <?php if ( isset( $result['error'] ) ) : ?>
                     <div class="notice notice-error"><p><?php echo esc_html( $result['error'] ); ?></p></div>
-                <?php elseif ( ! empty( $result['truncated'] ) ) : ?>
-                    <div class="notice notice-warning"><p><?php esc_html_e( 'More than 500 orders match this window. Only the first 500 are shown. Narrow the date range for a complete view.', 'woocommerce-shipstation-integration-wr' ); ?></p></div>
-                <?php endif; ?>
-                <?php if ( ! isset( $result['error'] ) ) : ?>
+                <?php else : ?>
 
-                    <div class="wsi-wr-summary-box" style="margin-bottom:20px;">
-                        <ul>
-                            <li><?php esc_html_e( 'SKU:', 'woocommerce-shipstation-integration-wr' ); ?> <strong><?php echo esc_html( $result['sku'] ); ?></strong> <?php printf( esc_html__( '(WC product ID: %d)', 'woocommerce-shipstation-integration-wr' ), (int) $result['product_id'] ); ?></li>
-                            <li><?php esc_html_e( 'Window:', 'woocommerce-shipstation-integration-wr' ); ?> <strong><?php echo esc_html( $result['since_datetime'] ); ?></strong> <?php esc_html_e( 'to now (server time)', 'woocommerce-shipstation-integration-wr' ); ?></li>
-                            <li><strong><?php echo (int) $result['total_units']; ?></strong> <?php esc_html_e( 'total units in non-cancelled orders', 'woocommerce-shipstation-integration-wr' ); ?></li>
-                            <li><strong style="color:#00a32a;"><?php echo (int) $result['pending_units']; ?></strong> <?php esc_html_e( 'units awaiting shipment (processing / on-hold)', 'woocommerce-shipstation-integration-wr' ); ?></li>
-                        </ul>
+                    <?php if ( ! empty( $result['truncated'] ) ) : ?>
+                        <div class="notice notice-warning" style="margin-bottom:16px;">
+                            <p><?php esc_html_e( 'More than 500 orders match this window. Only the first 500 are shown. Narrow the date range for a complete view.', 'woocommerce-shipstation-integration-wr' ); ?></p>
+                        </div>
+                    <?php endif; ?>
+
+                    <div class="wsi-wr-summary-box" style="margin-bottom:24px;">
+                        <table style="border-collapse:collapse; min-width:420px;">
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Product', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <strong><?php echo esc_html( $result['product_name'] ); ?></strong>
+                                    <span style="color:#999; margin-left:8px;"><?php echo esc_html( $result['sku'] ); ?> &mdash; ID <?php echo (int) $result['product_id']; ?></span>
+                                    <span style="color:#999; margin-left:8px; font-size:12px;">(<?php echo esc_html( $result['product_type'] ); ?>)</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Current WC stock', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <?php if ( ! $result['manage_stock'] ) : ?>
+                                        <span style="color:#999;"><?php esc_html_e( 'Stock management disabled', 'woocommerce-shipstation-integration-wr' ); ?></span>
+                                    <?php elseif ( null === $result['stock_qty'] ) : ?>
+                                        <span style="color:#999;"><?php esc_html_e( '—', 'woocommerce-shipstation-integration-wr' ); ?></span>
+                                    <?php else : ?>
+                                        <strong style="font-size:15px;"><?php echo (int) $result['stock_qty']; ?></strong>
+                                        <?php if ( 'yes' === $result['backorders'] ) : ?>
+                                            <span style="color:#d63638; margin-left:8px;"><?php esc_html_e( 'Backorders allowed', 'woocommerce-shipstation-integration-wr' ); ?></span>
+                                        <?php elseif ( 'notify' === $result['backorders'] ) : ?>
+                                            <span style="color:#dba617; margin-left:8px;"><?php esc_html_e( 'Backorders allowed (notify)', 'woocommerce-shipstation-integration-wr' ); ?></span>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'All-time orders (SKU)', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <strong><?php echo (int) $result['all_time_orders']; ?></strong>
+                                    <span style="color:#999; margin-left:6px; font-size:12px;"><?php esc_html_e( 'all statuses, no date filter', 'woocommerce-shipstation-integration-wr' ); ?></span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <strong><?php echo esc_html( $result['since_datetime'] ); ?></strong>
+                                    <?php esc_html_e( '→ now', 'woocommerce-shipstation-integration-wr' ); ?>
+                                    <span style="color:#999;">(<?php echo esc_html( $timezone ); ?>)</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Total units sold', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <strong style="font-size:15px;"><?php echo (int) $result['total_units']; ?></strong>
+                                    <?php if ( ! empty( $result['status_breakdown'] ) ) : ?>
+                                        <span style="color:#999; margin-left:8px; font-size:12px;">
+                                            <?php
+                                            $parts = [];
+                                            foreach ( $result['status_breakdown'] as $status => $units ) {
+                                                $parts[] = esc_html( $status ) . ': ' . (int) $units;
+                                            }
+                                            echo implode( ' &nbsp;·&nbsp; ', $parts ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                            ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Awaiting shipment', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <strong style="font-size:15px; color:#00a32a;"><?php echo (int) $result['pending_units']; ?></strong>
+                                    <span style="color:#999; margin-left:8px; font-size:12px;"><?php esc_html_e( 'processing + on-hold', 'woocommerce-shipstation-integration-wr' ); ?></span>
+                                </td>
+                            </tr>
+                        </table>
                     </div>
 
                     <h4><?php esc_html_e( 'Orders Awaiting Shipment', 'woocommerce-shipstation-integration-wr' ); ?></h4>
@@ -117,6 +187,7 @@ class Order_Diagnostic {
         global $wpdb;
 
         $max_orders = 500;
+        $use_hpos   = $this->is_hpos_enabled();
 
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $product_id = (int) $wpdb->get_var(
@@ -130,19 +201,67 @@ class Order_Diagnostic {
             return [ 'error' => sprintf( __( 'No WooCommerce product found with SKU: %s', 'woocommerce-shipstation-integration-wr' ), $sku ) ];
         }
 
-        // Fetch one extra row to detect truncation without a separate COUNT query.
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+        $product      = wc_get_product( $product_id );
+        $product_name = $product ? $product->get_name() : '—';
+        $stock_qty    = $product ? $product->get_stock_quantity() : null;
+        $manage_stock = $product ? $product->get_manage_stock() : false;
+        $backorders   = $product ? $product->get_backorders() : 'no';
+        $product_type = $product ? $product->get_type() : '—';
+
+        // For variations use _variation_id; for simple/parent products use _product_id.
+        $id_meta_key = ( $product && $product->is_type( 'variation' ) ) ? '_variation_id' : '_product_id';
+
+        // Build HPOS-aware order join and date column.
+        // wc_orders.date_created_gmt is UTC so convert the local input; post_date is local.
+        if ( $use_hpos ) {
+            $order_join  = "INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id AND o.type = 'shop_order'";
+            $date_col    = 'o.date_created_gmt';
+            $filter_date = get_gmt_from_date( $since_datetime );
+        } else {
+            $order_join  = "INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id AND p.post_type = 'shop_order'";
+            $date_col    = 'p.post_date';
+            $filter_date = $since_datetime;
+        }
+
+        // All-time order count — no date filter — used to show scope vs. the window.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $all_time_orders = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(DISTINCT oi.order_id)
+                 FROM {$wpdb->prefix}woocommerce_order_items oi
+                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                     ON id_meta.order_item_id = oi.order_item_id
+                     AND id_meta.meta_key = %s
+                     AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                 $order_join
+                 WHERE oi.order_item_type = 'line_item'",
+                $id_meta_key,
+                $product_id
+            )
+        );
+
+        // Windowed query via order items — always authoritative across all order statuses.
+        // wc_order_product_lookup can be stale and in some WC versions only indexes completed orders.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $rows = $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT order_id, SUM(product_qty) AS qty
-                 FROM {$wpdb->prefix}wc_order_product_lookup
-                 WHERE ( product_id = %d OR variation_id = %d )
-                   AND date_created >= %s
-                 GROUP BY order_id
+                "SELECT oi.order_id, SUM(CAST(qty_meta.meta_value AS SIGNED)) AS qty
+                 FROM {$wpdb->prefix}woocommerce_order_items oi
+                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                     ON id_meta.order_item_id = oi.order_item_id
+                     AND id_meta.meta_key = %s
+                     AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qty_meta
+                     ON qty_meta.order_item_id = oi.order_item_id
+                     AND qty_meta.meta_key = '_qty'
+                 $order_join
+                 WHERE oi.order_item_type = 'line_item'
+                   AND $date_col >= %s
+                 GROUP BY oi.order_id
                  LIMIT %d",
+                $id_meta_key,
                 $product_id,
-                $product_id,
-                $since_datetime,
+                $filter_date,
                 $max_orders + 1
             ),
             ARRAY_A
@@ -153,34 +272,41 @@ class Order_Diagnostic {
             $rows = array_slice( $rows, 0, $max_orders );
         }
 
+        $empty_base = [
+            'sku'              => $sku,
+            'product_id'       => $product_id,
+            'product_name'     => $product_name,
+            'product_type'     => $product_type,
+            'stock_qty'        => $stock_qty,
+            'manage_stock'     => $manage_stock,
+            'backorders'       => $backorders,
+            'since_datetime'   => $since_datetime,
+            'all_time_orders'  => $all_time_orders,
+            'total_units'      => 0,
+            'pending_units'    => 0,
+            'status_breakdown' => [],
+            'all_orders'       => [],
+            'pending_orders'   => [],
+            'truncated'        => false,
+        ];
+
         if ( empty( $rows ) ) {
-            return [
-                'sku'            => $sku,
-                'product_id'     => $product_id,
-                'since_datetime' => $since_datetime,
-                'total_units'    => 0,
-                'pending_units'  => 0,
-                'all_orders'     => [],
-                'pending_orders' => [],
-                'truncated'      => false,
-            ];
+            return $empty_base;
         }
 
         $order_qty_map = [];
         foreach ( $rows as $row ) {
             $order_qty_map[ (int) $row['order_id'] ] = (int) $row['qty'];
         }
-        $all_order_ids = array_keys( $order_qty_map );
-
-        // Fetch status + date for all orders in one SQL query instead of loading
-        // full WC_Order objects, which exhausts memory on large result sets.
+        $all_order_ids   = array_keys( $order_qty_map );
         $in_placeholders = implode( ',', array_fill( 0, count( $all_order_ids ), '%d' ) );
 
-        if ( $this->is_hpos_enabled() ) {
+        // Fetch status, date, and order total for all matched orders in one query.
+        if ( $use_hpos ) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT id AS order_id, status, date_created_gmt AS date_created
+                    "SELECT id AS order_id, status, date_created_gmt AS date_created, total_amount
                      FROM {$wpdb->prefix}wc_orders
                      WHERE id IN ($in_placeholders)
                        AND type = 'shop_order'",
@@ -192,10 +318,12 @@ class Order_Diagnostic {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT ID AS order_id, post_status AS status, post_date AS date_created
-                     FROM {$wpdb->posts}
-                     WHERE ID IN ($in_placeholders)
-                       AND post_type = 'shop_order'",
+                    "SELECT p.ID AS order_id, p.post_status AS status, p.post_date AS date_created,
+                            pm.meta_value AS total_amount
+                     FROM {$wpdb->posts} p
+                     LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_order_total'
+                     WHERE p.ID IN ($in_placeholders)
+                       AND p.post_type = 'shop_order'",
                     ...$all_order_ids
                 ),
                 ARRAY_A
@@ -208,19 +336,23 @@ class Order_Diagnostic {
             if ( 'wc-' === substr( $status, 0, 3 ) ) {
                 $status = substr( $status, 3 );
             }
+            $total = ( isset( $meta['total_amount'] ) && '' !== $meta['total_amount'] )
+                ? '$' . number_format( (float) $meta['total_amount'], 2 )
+                : '—';
             $order_info_map[ (int) $meta['order_id'] ] = [
                 'status' => $status,
                 'date'   => $meta['date_created'] ? substr( $meta['date_created'], 0, 16 ) : '?',
+                'total'  => $total,
             ];
         }
 
-        $non_cancelled = [ 'completed', 'processing', 'on-hold', 'refunded', 'pending' ];
-        $pending_set   = [ 'processing', 'on-hold' ];
-
-        $total_units    = 0;
-        $pending_units  = 0;
-        $all_orders     = [];
-        $pending_orders = [];
+        $non_cancelled    = [ 'completed', 'processing', 'on-hold', 'refunded' ];
+        $pending_set      = [ 'processing', 'on-hold' ];
+        $total_units      = 0;
+        $pending_units    = 0;
+        $all_orders       = [];
+        $pending_orders   = [];
+        $status_breakdown = [];
 
         foreach ( $all_order_ids as $oid ) {
             $qty  = $order_qty_map[ $oid ] ?? 0;
@@ -231,11 +363,20 @@ class Order_Diagnostic {
             }
 
             $total_units += $qty;
-            $row          = [
+
+            $status_breakdown[ $info['status'] ] = ( $status_breakdown[ $info['status'] ] ?? 0 ) + $qty;
+
+            $edit_url = $use_hpos
+                ? admin_url( 'admin.php?page=wc-orders&action=edit&id=' . $oid )
+                : admin_url( 'post.php?post=' . $oid . '&action=edit' );
+
+            $row = [
                 'order_id' => $oid,
                 'qty'      => $qty,
                 'status'   => $info['status'],
                 'date'     => $info['date'],
+                'total'    => $info['total'],
+                'edit_url' => $edit_url,
             ];
             $all_orders[] = $row;
 
@@ -246,14 +387,21 @@ class Order_Diagnostic {
         }
 
         return [
-            'sku'            => $sku,
-            'product_id'     => $product_id,
-            'since_datetime' => $since_datetime,
-            'total_units'    => $total_units,
-            'pending_units'  => $pending_units,
-            'all_orders'     => $all_orders,
-            'pending_orders' => $pending_orders,
-            'truncated'      => $truncated,
+            'sku'              => $sku,
+            'product_id'       => $product_id,
+            'product_name'     => $product_name,
+            'product_type'     => $product_type,
+            'stock_qty'        => $stock_qty,
+            'manage_stock'     => $manage_stock,
+            'backorders'       => $backorders,
+            'since_datetime'   => $since_datetime,
+            'all_time_orders'  => $all_time_orders,
+            'total_units'      => $total_units,
+            'pending_units'    => $pending_units,
+            'status_breakdown' => $status_breakdown,
+            'all_orders'       => $all_orders,
+            'pending_orders'   => $pending_orders,
+            'truncated'        => $truncated,
         ];
     }
 
@@ -277,15 +425,21 @@ class Order_Diagnostic {
                     <th><?php esc_html_e( 'Date', 'woocommerce-shipstation-integration-wr' ); ?></th>
                     <th><?php esc_html_e( 'Status', 'woocommerce-shipstation-integration-wr' ); ?></th>
                     <th><?php esc_html_e( 'Units', 'woocommerce-shipstation-integration-wr' ); ?></th>
+                    <th><?php esc_html_e( 'Order Total', 'woocommerce-shipstation-integration-wr' ); ?></th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ( $orders as $row ) : ?>
                     <tr>
-                        <td><strong>#<?php echo (int) $row['order_id']; ?></strong></td>
+                        <td>
+                            <a href="<?php echo esc_url( $row['edit_url'] ); ?>" target="_blank">
+                                <strong>#<?php echo (int) $row['order_id']; ?></strong>
+                            </a>
+                        </td>
                         <td><?php echo esc_html( $row['date'] ); ?></td>
                         <td><?php echo esc_html( $row['status'] ); ?></td>
                         <td><strong><?php echo (int) $row['qty']; ?></strong></td>
+                        <td><?php echo esc_html( $row['total'] ); ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
