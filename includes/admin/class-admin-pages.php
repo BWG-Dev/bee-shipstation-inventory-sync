@@ -16,8 +16,8 @@ class Admin_Pages {
     public static function add_menus(): void {
         add_submenu_page(
             'woocommerce',
-            __( 'ShipStation Integration WR', 'woocommerce-shipstation-integration-wr' ),
-            __( 'ShipStation WR', 'woocommerce-shipstation-integration-wr' ),
+            __( 'ShipStation Integration', 'woocommerce-shipstation-integration-wr' ),
+            __( 'ShipStation Sync', 'woocommerce-shipstation-integration-wr' ),
             'manage_woocommerce',
             'wsi-wr-reports',
             [ __CLASS__, 'render_page' ]
@@ -28,14 +28,15 @@ class Admin_Pages {
         $tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'alignment'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 
         $tabs = [
-            'alignment'    => __( 'SKU Alignment Report', 'woocommerce-shipstation-integration-wr' ),
-            'dry-run'      => __( 'Dry-Run Sync', 'woocommerce-shipstation-integration-wr' ),
-            'manual-sync'  => __( 'Manual Sync', 'woocommerce-shipstation-integration-wr' ),
-            'tracked-skus' => __( 'Tracked SKUs', 'woocommerce-shipstation-integration-wr' ),
+            'alignment'        => __( 'SKU Alignment Report', 'woocommerce-shipstation-integration-wr' ),
+            'dry-run'          => __( 'Dry-Run Sync', 'woocommerce-shipstation-integration-wr' ),
+            'manual-sync'      => __( 'Manual Sync', 'woocommerce-shipstation-integration-wr' ),
+            'tracked-skus'     => __( 'Tracked SKUs', 'woocommerce-shipstation-integration-wr' ),
+            'order-diagnostic' => __( 'Order Diagnostic', 'woocommerce-shipstation-integration-wr' ),
         ];
 
         echo '<div class="wrap wsi-wr-admin-wrap">';
-        echo '<h1>' . esc_html__( 'ShipStation Integration WR', 'woocommerce-shipstation-integration-wr' ) . '</h1>';
+        echo '<h1>' . esc_html__( 'ShipStation Integration', 'woocommerce-shipstation-integration-wr' ) . '</h1>';
 
         // Tab navigation
         echo '<nav class="nav-tab-wrapper woo-nav-tab-wrapper">';
@@ -57,6 +58,9 @@ class Admin_Pages {
         } elseif ( 'manual-sync' === $tab ) {
             require_once WSI_WR_PLUGIN_DIR . 'includes/admin/pages/class-manual-sync.php';
             ( new Pages\Manual_Sync() )->render();
+        } elseif ( 'order-diagnostic' === $tab ) {
+            require_once WSI_WR_PLUGIN_DIR . 'includes/admin/pages/class-order-diagnostic.php';
+            ( new Pages\Order_Diagnostic() )->render();
         } else {
             require_once WSI_WR_PLUGIN_DIR . 'includes/admin/pages/class-sku-alignment-report.php';
             ( new Pages\SKU_Alignment_Report() )->render();

@@ -22,6 +22,7 @@ class Ajax_Handlers {
         add_action( 'wp_ajax_wsi_wr_run_dry_run',             [ __CLASS__, 'run_dry_run' ] );
         add_action( 'wp_ajax_wsi_wr_run_manual_sync',              [ __CLASS__, 'run_manual_sync' ] );
         add_action( 'wp_ajax_wsi_wr_refresh_inventory_locations',  [ __CLASS__, 'refresh_inventory_locations' ] );
+        add_action( 'wp_ajax_wsi_wr_run_order_diagnostic',         [ __CLASS__, 'run_order_diagnostic' ] );
     }
 
     public static function test_connection(): void {
@@ -606,6 +607,147 @@ class Ajax_Handlers {
             'auto_selected'        => $result['auto_selected'],
             /* translators: %d number of locations found */
             'message'              => sprintf( _n( '%d inventory location loaded.', '%d inventory locations loaded.', $count, 'woocommerce-shipstation-integration-wr' ), $count ),
+        ] );
+    }
+
+    // ── Order Diagnostic ─────────────────────────────────────────────────────
+
+    public static function run_order_diagnostic(): void {
+        check_ajax_referer( 'wsi_wr_run_order_diagnostic', 'nonce' );
+
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Insufficient permissions.', 'woocommerce-shipstation-integration-wr' ) ], 403 );
+        }
+
+        $sku        = sanitize_text_field( trim( wp_unslash( $_POST['sku'] ?? '' ) ) );
+        $since_date = sanitize_text_field( trim( wp_unslash( $_POST['since_date'] ?? '' ) ) );
+
+        if ( '' === $sku ) {
+            wp_send_json_error( [ 'message' => __( 'SKU is required.', 'woocommerce-shipstation-integration-wr' ) ] );
+        }
+
+        // datetime-local sends YYYY-MM-DDTHH:MM; normalise to MySQL datetime.
+        $since_date = str_replace( 'T', ' ', $since_date );
+        if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/', $since_date ) ) {
+            wp_send_json_error( [ 'message' => __( 'Invalid date. Use YYYY-MM-DD or YYYY-MM-DD HH:MM format.', 'woocommerce-shipstation-integration-wr' ) ] );
+        }
+
+        global $wpdb;
+
+        // Resolve product ID via HPOS-compatible lookup table.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+        $product_id = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT product_id FROM {$wpdb->prefix}wc_product_meta_lookup WHERE sku = %s LIMIT 1",
+                $sku
+            )
+        );
+
+        if ( ! $product_id ) {
+            wp_send_json_error( [
+                'message' => sprintf(
+                    /* translators: %s SKU string */
+                    __( 'No WooCommerce product found with SKU: %s', 'woocommerce-shipstation-integration-wr' ),
+                    esc_html( $sku )
+                ),
+            ] );
+        }
+
+        // Pad to full MySQL datetime.
+        if ( 10 === strlen( $since_date ) ) {
+            $since_datetime = $since_date . ' 00:00:00';
+        } elseif ( 16 === strlen( $since_date ) ) {
+            $since_datetime = $since_date . ':00';
+        } else {
+            $since_datetime = $since_date;
+        }
+
+        // Fetch all orders containing this product/variation since the date.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT order_id, SUM(product_qty) AS qty
+                 FROM {$wpdb->prefix}wc_order_product_lookup
+                 WHERE ( product_id = %d OR variation_id = %d )
+                   AND date_created >= %s
+                 GROUP BY order_id",
+                $product_id,
+                $product_id,
+                $since_datetime
+            ),
+            ARRAY_A
+        );
+
+        if ( empty( $rows ) ) {
+            wp_send_json_success( [
+                'sku'            => $sku,
+                'product_id'     => $product_id,
+                'since_date'     => $since_datetime,
+                'total_units'    => 0,
+                'pending_units'  => 0,
+                'all_orders'     => [],
+                'pending_orders' => [],
+            ] );
+        }
+
+        $order_qty_map = [];
+        foreach ( $rows as $row ) {
+            $order_qty_map[ (int) $row['order_id'] ] = (int) $row['qty'];
+        }
+        $all_order_ids = array_keys( $order_qty_map );
+
+        // Non-cancelled orders — HPOS-compatible via wc_get_orders().
+        $sold_ids = wc_get_orders( [
+            'include' => $all_order_ids,
+            'status'  => [ 'completed', 'processing', 'on-hold', 'refunded', 'pending' ],
+            'limit'   => -1,
+            'return'  => 'ids',
+            'type'    => 'shop_order',
+        ] );
+
+        // Orders still awaiting shipment.
+        $pending_ids = wc_get_orders( [
+            'include' => $all_order_ids,
+            'status'  => [ 'processing', 'on-hold' ],
+            'limit'   => -1,
+            'return'  => 'ids',
+            'type'    => 'shop_order',
+        ] );
+
+        $pending_id_set = array_flip( array_map( 'intval', $pending_ids ) );
+
+        $total_units   = 0;
+        $pending_units = 0;
+        $all_orders    = [];
+        $pending_orders = [];
+
+        foreach ( $sold_ids as $oid ) {
+            $qty   = $order_qty_map[ $oid ] ?? 0;
+            $order = wc_get_order( $oid );
+            $total_units += $qty;
+
+            $row = [
+                'order_id' => $oid,
+                'qty'      => $qty,
+                'status'   => $order ? $order->get_status() : '?',
+                'date'     => $order && $order->get_date_created() ? $order->get_date_created()->date( 'Y-m-d H:i' ) : '?',
+            ];
+            $all_orders[] = $row;
+
+            if ( isset( $pending_id_set[ $oid ] ) ) {
+                $pending_units += $qty;
+                $pending_orders[] = $row;
+            }
+        }
+
+        wp_send_json_success( [
+            'sku'            => $sku,
+            'product_id'     => $product_id,
+            'since_date'     => $since_datetime,
+            'total_units'    => $total_units,
+            'pending_units'  => $pending_units,
+            'all_orders'     => $all_orders,
+            'pending_orders' => $pending_orders,
         ] );
     }
 

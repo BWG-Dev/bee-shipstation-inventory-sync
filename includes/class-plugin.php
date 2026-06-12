@@ -99,6 +99,7 @@ class Plugin {
                 'test_connection'    => wp_create_nonce( 'wsi_wr_test_connection' ),
                 'fetch_sample'       => wp_create_nonce( 'wsi_wr_fetch_inventory_sample' ),
                 'refresh_locations'  => wp_create_nonce( 'wsi_wr_refresh_inventory_locations' ),
+                'order_diagnostic'   => wp_create_nonce( 'wsi_wr_run_order_diagnostic' ),
             ],
             'strings'  => [
                 'test_connection_label'       => __( 'Test Connection', 'woocommerce-shipstation-integration-wr' ),
