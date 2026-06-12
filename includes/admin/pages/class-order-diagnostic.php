@@ -262,8 +262,8 @@ class Order_Diagnostic {
         }
 
         // Include any order where EITHER the payment date OR the completed date falls within
-        // the window. This matches what ShipStation decrements: new orders paid after go-live
-        // AND old orders that were shipped/completed after go-live.
+        // the window. date_paid_gmt and date_completed_gmt live in wc_order_operational_data,
+        // not wc_orders itself.
         if ( $use_hpos ) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results(
@@ -280,12 +280,14 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->prefix}wc_orders o
                          ON o.id = oi.order_id
                          AND o.type = 'shop_order'
-                         AND (
-                             ( o.date_paid_gmt IS NOT NULL AND o.date_paid_gmt >= %s )
-                             OR
-                             ( o.date_completed_gmt IS NOT NULL AND o.date_completed_gmt >= %s )
-                         )
+                     LEFT JOIN {$wpdb->prefix}wc_order_operational_data od
+                         ON od.order_id = o.id
                      WHERE oi.order_item_type = 'line_item'
+                       AND (
+                           ( od.date_paid_gmt IS NOT NULL AND od.date_paid_gmt >= %s )
+                           OR
+                           ( od.date_completed_gmt IS NOT NULL AND od.date_completed_gmt >= %s )
+                       )
                      GROUP BY oi.order_id
                      LIMIT %d",
                     $id_meta_key,
@@ -391,10 +393,11 @@ class Order_Diagnostic {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT id AS order_id, status, date_paid_gmt AS date_paid, total_amount
-                     FROM {$wpdb->prefix}wc_orders
-                     WHERE id IN ($in_placeholders)
-                       AND type = 'shop_order'",
+                    "SELECT o.id AS order_id, o.status, od.date_paid_gmt AS date_paid, o.total_amount
+                     FROM {$wpdb->prefix}wc_orders o
+                     LEFT JOIN {$wpdb->prefix}wc_order_operational_data od ON od.order_id = o.id
+                     WHERE o.id IN ($in_placeholders)
+                       AND o.type = 'shop_order'",
                     ...$all_order_ids
                 ),
                 ARRAY_A
