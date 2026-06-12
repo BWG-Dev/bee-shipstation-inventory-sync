@@ -73,11 +73,11 @@ class Order_Diagnostic {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row"><label for="wsi-wr-diag-since"><?php esc_html_e( 'Orders since', 'woocommerce-shipstation-integration-wr' ); ?></label></th>
+                        <th scope="row"><label for="wsi-wr-diag-since"><?php esc_html_e( 'Paid since', 'woocommerce-shipstation-integration-wr' ); ?></label></th>
                         <td>
                             <input type="datetime-local" id="wsi-wr-diag-since" name="since_date" class="regular-text"
                                 value="<?php echo esc_attr( $default_date ); ?>">
-                            <p class="description"><?php esc_html_e( 'Server local time. Use the plugin go-live date/time, or a specific recount time for reconciliation.', 'woocommerce-shipstation-integration-wr' ); ?></p>
+                            <p class="description"><?php esc_html_e( 'Filters by payment date (when stock was decremented), not order creation date. Use the plugin go-live date/time for reconciliation.', 'woocommerce-shipstation-integration-wr' ); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -137,7 +137,7 @@ class Order_Diagnostic {
                                 </td>
                             </tr>
                             <tr>
-                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window (paid date)', 'woocommerce-shipstation-integration-wr' ); ?></td>
                                 <td style="padding:4px 0;">
                                     <strong><?php echo esc_html( $result['since_datetime'] ); ?></strong>
                                     <?php esc_html_e( '→ now', 'woocommerce-shipstation-integration-wr' ); ?>
@@ -207,65 +207,112 @@ class Order_Diagnostic {
         $manage_stock = $product ? $product->get_manage_stock() : false;
         $backorders   = $product ? $product->get_backorders() : 'no';
         $product_type = $product ? $product->get_type() : '—';
+        $id_meta_key  = ( $product && $product->is_type( 'variation' ) ) ? '_variation_id' : '_product_id';
 
-        // For variations use _variation_id; for simple/parent products use _product_id.
-        $id_meta_key = ( $product && $product->is_type( 'variation' ) ) ? '_variation_id' : '_product_id';
+        // Convert the local since_datetime to a UTC Unix timestamp for _date_paid comparison
+        // and a UTC datetime string for date_paid_gmt comparison.
+        $since_ts  = (int) ( new \DateTime( $since_datetime, wp_timezone() ) )->getTimestamp();
+        $since_gmt = gmdate( 'Y-m-d H:i:s', $since_ts );
 
-        // Build HPOS-aware order join and date column.
-        // wc_orders.date_created_gmt is UTC so convert the local input; post_date is local.
+        // All-time order count — no date filter — shows scope vs. the window.
         if ( $use_hpos ) {
-            $order_join  = "INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id AND o.type = 'shop_order'";
-            $date_col    = 'o.date_created_gmt';
-            $filter_date = get_gmt_from_date( $since_datetime );
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $all_time_orders = (int) $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COUNT(DISTINCT oi.order_id)
+                     FROM {$wpdb->prefix}woocommerce_order_items oi
+                     INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                         ON id_meta.order_item_id = oi.order_item_id
+                         AND id_meta.meta_key = %s
+                         AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                     INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id AND o.type = 'shop_order'
+                     WHERE oi.order_item_type = 'line_item'",
+                    $id_meta_key,
+                    $product_id
+                )
+            );
         } else {
-            $order_join  = "INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id AND p.post_type = 'shop_order'";
-            $date_col    = 'p.post_date';
-            $filter_date = $since_datetime;
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+            $all_time_orders = (int) $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COUNT(DISTINCT oi.order_id)
+                     FROM {$wpdb->prefix}woocommerce_order_items oi
+                     INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                         ON id_meta.order_item_id = oi.order_item_id
+                         AND id_meta.meta_key = %s
+                         AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                     INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id AND p.post_type = 'shop_order'
+                     WHERE oi.order_item_type = 'line_item'",
+                    $id_meta_key,
+                    $product_id
+                )
+            );
         }
 
-        // All-time order count — no date filter — used to show scope vs. the window.
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $all_time_orders = (int) $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COUNT(DISTINCT oi.order_id)
-                 FROM {$wpdb->prefix}woocommerce_order_items oi
-                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
-                     ON id_meta.order_item_id = oi.order_item_id
-                     AND id_meta.meta_key = %s
-                     AND CAST(id_meta.meta_value AS UNSIGNED) = %d
-                 $order_join
-                 WHERE oi.order_item_type = 'line_item'",
-                $id_meta_key,
-                $product_id
-            )
-        );
-
-        // Windowed query via order items — always authoritative across all order statuses.
-        // wc_order_product_lookup can be stale and in some WC versions only indexes completed orders.
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT oi.order_id, SUM(CAST(qty_meta.meta_value AS SIGNED)) AS qty
-                 FROM {$wpdb->prefix}woocommerce_order_items oi
-                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
-                     ON id_meta.order_item_id = oi.order_item_id
-                     AND id_meta.meta_key = %s
-                     AND CAST(id_meta.meta_value AS UNSIGNED) = %d
-                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qty_meta
-                     ON qty_meta.order_item_id = oi.order_item_id
-                     AND qty_meta.meta_key = '_qty'
-                 $order_join
-                 WHERE oi.order_item_type = 'line_item'
-                   AND $date_col >= %s
-                 GROUP BY oi.order_id
-                 LIMIT %d",
-                $id_meta_key,
-                $product_id,
-                $filter_date,
-                $max_orders + 1
-            ),
-            ARRAY_A
-        );
+        // Windowed query filtered by payment date, not creation date.
+        // Abandoned/recovered orders have an old creation date but a recent payment date —
+        // filtering by date_paid ensures we capture them correctly.
+        if ( $use_hpos ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT oi.order_id, SUM(CAST(qty_meta.meta_value AS SIGNED)) AS qty
+                     FROM {$wpdb->prefix}woocommerce_order_items oi
+                     INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                         ON id_meta.order_item_id = oi.order_item_id
+                         AND id_meta.meta_key = %s
+                         AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                     INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qty_meta
+                         ON qty_meta.order_item_id = oi.order_item_id
+                         AND qty_meta.meta_key = '_qty'
+                     INNER JOIN {$wpdb->prefix}wc_orders o
+                         ON o.id = oi.order_id
+                         AND o.type = 'shop_order'
+                         AND o.date_paid_gmt IS NOT NULL
+                         AND o.date_paid_gmt >= %s
+                     WHERE oi.order_item_type = 'line_item'
+                     GROUP BY oi.order_id
+                     LIMIT %d",
+                    $id_meta_key,
+                    $product_id,
+                    $since_gmt,
+                    $max_orders + 1
+                ),
+                ARRAY_A
+            );
+        } else {
+            // _date_paid is stored as a UTC Unix timestamp in postmeta.
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT oi.order_id, SUM(CAST(qty_meta.meta_value AS SIGNED)) AS qty
+                     FROM {$wpdb->prefix}woocommerce_order_items oi
+                     INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                         ON id_meta.order_item_id = oi.order_item_id
+                         AND id_meta.meta_key = %s
+                         AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                     INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qty_meta
+                         ON qty_meta.order_item_id = oi.order_item_id
+                         AND qty_meta.meta_key = '_qty'
+                     INNER JOIN {$wpdb->posts} p
+                         ON p.ID = oi.order_id
+                         AND p.post_type = 'shop_order'
+                     INNER JOIN {$wpdb->postmeta} pm_paid
+                         ON pm_paid.post_id = p.ID
+                         AND pm_paid.meta_key = '_date_paid'
+                         AND pm_paid.meta_value != ''
+                         AND CAST(pm_paid.meta_value AS UNSIGNED) >= %d
+                     WHERE oi.order_item_type = 'line_item'
+                     GROUP BY oi.order_id
+                     LIMIT %d",
+                    $id_meta_key,
+                    $product_id,
+                    $since_ts,
+                    $max_orders + 1
+                ),
+                ARRAY_A
+            );
+        }
 
         $truncated = count( $rows ) > $max_orders;
         if ( $truncated ) {
@@ -301,12 +348,12 @@ class Order_Diagnostic {
         $all_order_ids   = array_keys( $order_qty_map );
         $in_placeholders = implode( ',', array_fill( 0, count( $all_order_ids ), '%d' ) );
 
-        // Fetch status, date, and order total for all matched orders in one query.
+        // Fetch status, payment date, order total, and order number for all matched orders.
         if ( $use_hpos ) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT o.id AS order_id, o.status, o.date_created_gmt AS date_created,
+                    "SELECT o.id AS order_id, o.status, o.date_paid_gmt AS date_paid,
                             o.total_amount,
                             om.meta_value AS order_number
                      FROM {$wpdb->prefix}wc_orders o
@@ -322,10 +369,13 @@ class Order_Diagnostic {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT p.ID AS order_id, p.post_status AS status, p.post_date AS date_created,
+                    "SELECT p.ID AS order_id, p.post_status AS status,
+                            pm_paid.meta_value AS date_paid_ts,
                             pm_total.meta_value AS total_amount,
                             pm_num.meta_value AS order_number
                      FROM {$wpdb->posts} p
+                     LEFT JOIN {$wpdb->postmeta} pm_paid
+                         ON pm_paid.post_id = p.ID AND pm_paid.meta_key = '_date_paid'
                      LEFT JOIN {$wpdb->postmeta} pm_total
                          ON pm_total.post_id = p.ID AND pm_total.meta_key = '_order_total'
                      LEFT JOIN {$wpdb->postmeta} pm_num
@@ -344,13 +394,25 @@ class Order_Diagnostic {
             if ( 'wc-' === substr( $status, 0, 3 ) ) {
                 $status = substr( $status, 3 );
             }
+
+            if ( $use_hpos ) {
+                $date_paid = ! empty( $meta['date_paid'] )
+                    ? substr( $meta['date_paid'], 0, 16 )
+                    : '?';
+            } else {
+                $date_paid = ! empty( $meta['date_paid_ts'] )
+                    ? date_i18n( 'Y-m-d H:i', (int) $meta['date_paid_ts'] )
+                    : '?';
+            }
+
             $total = ( isset( $meta['total_amount'] ) && '' !== $meta['total_amount'] )
                 ? '$' . number_format( (float) $meta['total_amount'], 2 )
                 : '—';
+
             $oid_int = (int) $meta['order_id'];
             $order_info_map[ $oid_int ] = [
                 'status'       => $status,
-                'date'         => $meta['date_created'] ? substr( $meta['date_created'], 0, 16 ) : '?',
+                'date_paid'    => $date_paid,
                 'total'        => $total,
                 'order_number' => ! empty( $meta['order_number'] ) ? $meta['order_number'] : (string) $oid_int,
             ];
@@ -385,7 +447,7 @@ class Order_Diagnostic {
                 'order_number' => $info['order_number'],
                 'qty'          => $qty,
                 'status'       => $info['status'],
-                'date'         => $info['date'],
+                'date_paid'    => $info['date_paid'],
                 'total'        => $info['total'],
                 'edit_url'     => $edit_url,
             ];
@@ -433,7 +495,7 @@ class Order_Diagnostic {
             <thead>
                 <tr>
                     <th><?php esc_html_e( 'Order #', 'woocommerce-shipstation-integration-wr' ); ?></th>
-                    <th><?php esc_html_e( 'Date', 'woocommerce-shipstation-integration-wr' ); ?></th>
+                    <th><?php esc_html_e( 'Paid', 'woocommerce-shipstation-integration-wr' ); ?></th>
                     <th><?php esc_html_e( 'Status', 'woocommerce-shipstation-integration-wr' ); ?></th>
                     <th><?php esc_html_e( 'Units', 'woocommerce-shipstation-integration-wr' ); ?></th>
                     <th><?php esc_html_e( 'Order Total', 'woocommerce-shipstation-integration-wr' ); ?></th>
@@ -447,7 +509,7 @@ class Order_Diagnostic {
                                 <strong>#<?php echo esc_html( $row['order_number'] ); ?></strong>
                             </a>
                         </td>
-                        <td><?php echo esc_html( $row['date'] ); ?></td>
+                        <td><?php echo esc_html( $row['date_paid'] ); ?></td>
                         <td><?php echo esc_html( $row['status'] ); ?></td>
                         <td><strong><?php echo (int) $row['qty']; ?></strong></td>
                         <td><?php echo esc_html( $row['total'] ); ?></td>
