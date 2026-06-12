@@ -306,10 +306,14 @@ class Order_Diagnostic {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT id AS order_id, status, date_created_gmt AS date_created, total_amount
-                     FROM {$wpdb->prefix}wc_orders
-                     WHERE id IN ($in_placeholders)
-                       AND type = 'shop_order'",
+                    "SELECT o.id AS order_id, o.status, o.date_created_gmt AS date_created,
+                            o.total_amount,
+                            om.meta_value AS order_number
+                     FROM {$wpdb->prefix}wc_orders o
+                     LEFT JOIN {$wpdb->prefix}wc_orders_meta om
+                         ON om.order_id = o.id AND om.meta_key = '_order_number'
+                     WHERE o.id IN ($in_placeholders)
+                       AND o.type = 'shop_order'",
                     ...$all_order_ids
                 ),
                 ARRAY_A
@@ -319,9 +323,13 @@ class Order_Diagnostic {
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
                     "SELECT p.ID AS order_id, p.post_status AS status, p.post_date AS date_created,
-                            pm.meta_value AS total_amount
+                            pm_total.meta_value AS total_amount,
+                            pm_num.meta_value AS order_number
                      FROM {$wpdb->posts} p
-                     LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_order_total'
+                     LEFT JOIN {$wpdb->postmeta} pm_total
+                         ON pm_total.post_id = p.ID AND pm_total.meta_key = '_order_total'
+                     LEFT JOIN {$wpdb->postmeta} pm_num
+                         ON pm_num.post_id = p.ID AND pm_num.meta_key = '_order_number'
                      WHERE p.ID IN ($in_placeholders)
                        AND p.post_type = 'shop_order'",
                     ...$all_order_ids
@@ -339,10 +347,12 @@ class Order_Diagnostic {
             $total = ( isset( $meta['total_amount'] ) && '' !== $meta['total_amount'] )
                 ? '$' . number_format( (float) $meta['total_amount'], 2 )
                 : '—';
-            $order_info_map[ (int) $meta['order_id'] ] = [
-                'status' => $status,
-                'date'   => $meta['date_created'] ? substr( $meta['date_created'], 0, 16 ) : '?',
-                'total'  => $total,
+            $oid_int = (int) $meta['order_id'];
+            $order_info_map[ $oid_int ] = [
+                'status'       => $status,
+                'date'         => $meta['date_created'] ? substr( $meta['date_created'], 0, 16 ) : '?',
+                'total'        => $total,
+                'order_number' => ! empty( $meta['order_number'] ) ? $meta['order_number'] : (string) $oid_int,
             ];
         }
 
@@ -371,12 +381,13 @@ class Order_Diagnostic {
                 : admin_url( 'post.php?post=' . $oid . '&action=edit' );
 
             $row = [
-                'order_id' => $oid,
-                'qty'      => $qty,
-                'status'   => $info['status'],
-                'date'     => $info['date'],
-                'total'    => $info['total'],
-                'edit_url' => $edit_url,
+                'order_id'     => $oid,
+                'order_number' => $info['order_number'],
+                'qty'          => $qty,
+                'status'       => $info['status'],
+                'date'         => $info['date'],
+                'total'        => $info['total'],
+                'edit_url'     => $edit_url,
             ];
             $all_orders[] = $row;
 
@@ -433,7 +444,7 @@ class Order_Diagnostic {
                     <tr>
                         <td>
                             <a href="<?php echo esc_url( $row['edit_url'] ); ?>" target="_blank">
-                                <strong>#<?php echo (int) $row['order_id']; ?></strong>
+                                <strong>#<?php echo esc_html( $row['order_number'] ); ?></strong>
                             </a>
                         </td>
                         <td><?php echo esc_html( $row['date'] ); ?></td>
