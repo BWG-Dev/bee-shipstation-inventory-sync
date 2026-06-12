@@ -268,8 +268,7 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->prefix}wc_orders o
                          ON o.id = oi.order_id
                          AND o.type = 'shop_order'
-                         AND o.date_paid_gmt IS NOT NULL
-                         AND o.date_paid_gmt >= %s
+                         AND COALESCE(o.date_paid_gmt, o.date_created_gmt) >= %s
                      WHERE oi.order_item_type = 'line_item'
                      GROUP BY oi.order_id
                      LIMIT %d",
@@ -297,17 +296,23 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->posts} p
                          ON p.ID = oi.order_id
                          AND p.post_type = 'shop_order'
-                     INNER JOIN {$wpdb->postmeta} pm_paid
+                     LEFT JOIN {$wpdb->postmeta} pm_paid
                          ON pm_paid.post_id = p.ID
                          AND pm_paid.meta_key = '_date_paid'
-                         AND pm_paid.meta_value != ''
-                         AND CAST(pm_paid.meta_value AS UNSIGNED) >= %d
                      WHERE oi.order_item_type = 'line_item'
+                       AND (
+                           ( pm_paid.meta_value IS NOT NULL AND pm_paid.meta_value != ''
+                             AND CAST(pm_paid.meta_value AS UNSIGNED) >= %d )
+                           OR
+                           ( ( pm_paid.meta_value IS NULL OR pm_paid.meta_value = '' )
+                             AND p.post_date >= %s )
+                       )
                      GROUP BY oi.order_id
                      LIMIT %d",
                     $id_meta_key,
                     $product_id,
                     $since_ts,
+                    $since_datetime,
                     $max_orders + 1
                 ),
                 ARRAY_A
