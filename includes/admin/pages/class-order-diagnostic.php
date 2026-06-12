@@ -73,11 +73,11 @@ class Order_Diagnostic {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row"><label for="wsi-wr-diag-since"><?php esc_html_e( 'Orders since', 'woocommerce-shipstation-integration-wr' ); ?></label></th>
+                        <th scope="row"><label for="wsi-wr-diag-since"><?php esc_html_e( 'Paid or completed since', 'woocommerce-shipstation-integration-wr' ); ?></label></th>
                         <td>
                             <input type="datetime-local" id="wsi-wr-diag-since" name="since_date" class="regular-text"
                                 value="<?php echo esc_attr( $default_date ); ?>">
-                            <p class="description"><?php esc_html_e( 'Filters by order creation date. The Paid column shows the actual payment date. For abandoned/recovered orders, set the date further back to catch them.', 'woocommerce-shipstation-integration-wr' ); ?></p>
+                            <p class="description"><?php esc_html_e( 'Shows orders where payment date OR completion date falls on or after this time. This matches what ShipStation decremented: new paid orders and older orders completed/shipped after go-live.', 'woocommerce-shipstation-integration-wr' ); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -137,7 +137,7 @@ class Order_Diagnostic {
                                 </td>
                             </tr>
                             <tr>
-                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window (order created)', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'Window (paid or completed)', 'woocommerce-shipstation-integration-wr' ); ?></td>
                                 <td style="padding:4px 0;">
                                     <strong><?php echo esc_html( $result['since_datetime'] ); ?></strong>
                                     <?php esc_html_e( '→ now', 'woocommerce-shipstation-integration-wr' ); ?>
@@ -261,8 +261,9 @@ class Order_Diagnostic {
             );
         }
 
-        // Filter by order creation date in SQL — simple and reliable across all WC versions
-        // and gateway types. Payment date is fetched separately for display and PHP filtering.
+        // Include any order where EITHER the payment date OR the completed date falls within
+        // the window. This matches what ShipStation decrements: new orders paid after go-live
+        // AND old orders that were shipped/completed after go-live.
         if ( $use_hpos ) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results(
@@ -279,18 +280,24 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->prefix}wc_orders o
                          ON o.id = oi.order_id
                          AND o.type = 'shop_order'
-                         AND o.date_created_gmt >= %s
+                         AND (
+                             ( o.date_paid_gmt IS NOT NULL AND o.date_paid_gmt >= %s )
+                             OR
+                             ( o.date_completed_gmt IS NOT NULL AND o.date_completed_gmt >= %s )
+                         )
                      WHERE oi.order_item_type = 'line_item'
                      GROUP BY oi.order_id
                      LIMIT %d",
                     $id_meta_key,
                     $product_id,
                     $since_gmt,
+                    $since_gmt,
                     $max_orders + 1
                 ),
                 ARRAY_A
             );
         } else {
+            // _date_paid and _date_completed are stored as UTC Unix timestamps in postmeta.
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results(
                 $wpdb->prepare(
@@ -306,13 +313,24 @@ class Order_Diagnostic {
                      INNER JOIN {$wpdb->posts} p
                          ON p.ID = oi.order_id
                          AND p.post_type = 'shop_order'
-                         AND p.post_date >= %s
+                     LEFT JOIN {$wpdb->postmeta} pm_paid
+                         ON pm_paid.post_id = p.ID AND pm_paid.meta_key = '_date_paid'
+                     LEFT JOIN {$wpdb->postmeta} pm_completed
+                         ON pm_completed.post_id = p.ID AND pm_completed.meta_key = '_date_completed'
                      WHERE oi.order_item_type = 'line_item'
+                       AND (
+                           ( pm_paid.meta_value IS NOT NULL AND pm_paid.meta_value != ''
+                             AND CAST(pm_paid.meta_value AS UNSIGNED) >= %d )
+                           OR
+                           ( pm_completed.meta_value IS NOT NULL AND pm_completed.meta_value != ''
+                             AND CAST(pm_completed.meta_value AS UNSIGNED) >= %d )
+                       )
                      GROUP BY oi.order_id
                      LIMIT %d",
                     $id_meta_key,
                     $product_id,
-                    $since_datetime,
+                    $since_ts,
+                    $since_ts,
                     $max_orders + 1
                 ),
                 ARRAY_A
@@ -373,14 +391,10 @@ class Order_Diagnostic {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
                 $wpdb->prepare(
-                    "SELECT o.id AS order_id, o.status, o.date_paid_gmt AS date_paid,
-                            o.total_amount,
-                            om.meta_value AS order_number
-                     FROM {$wpdb->prefix}wc_orders o
-                     LEFT JOIN {$wpdb->prefix}wc_orders_meta om
-                         ON om.order_id = o.id AND om.meta_key = '_order_number'
-                     WHERE o.id IN ($in_placeholders)
-                       AND o.type = 'shop_order'",
+                    "SELECT id AS order_id, status, date_paid_gmt AS date_paid, total_amount
+                     FROM {$wpdb->prefix}wc_orders
+                     WHERE id IN ($in_placeholders)
+                       AND type = 'shop_order'",
                     ...$all_order_ids
                 ),
                 ARRAY_A
@@ -408,9 +422,15 @@ class Order_Diagnostic {
             );
         }
 
+        $meta_db_error  = $wpdb->last_error ?: '(none)';
+        $order_meta     = is_array( $order_meta ) ? $order_meta : [];
+        $debug['meta_query_count'] = count( $order_meta );
+        $debug['meta_db_error']    = $meta_db_error;
+        $debug['status_sample']    = ! empty( $order_meta ) ? $order_meta[0]['status'] ?? '?' : '(empty)';
+
         $order_info_map = [];
         foreach ( $order_meta as $meta ) {
-            $status = $meta['status'];
+            $status = $meta['status'] ?? '';
             if ( 'wc-' === substr( $status, 0, 3 ) ) {
                 $status = substr( $status, 3 );
             }
@@ -434,7 +454,7 @@ class Order_Diagnostic {
                 'status'       => $status,
                 'date_paid'    => $date_paid,
                 'total'        => $total,
-                'order_number' => ! empty( $meta['order_number'] ) ? $meta['order_number'] : (string) $oid_int,
+                'order_number' => (string) $oid_int,
             ];
         }
 
