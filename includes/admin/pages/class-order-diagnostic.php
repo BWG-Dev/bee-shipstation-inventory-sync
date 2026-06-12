@@ -109,6 +109,7 @@ class Order_Diagnostic {
                                 <td style="padding:4px 0;">
                                     <strong><?php echo esc_html( $result['product_name'] ); ?></strong>
                                     <span style="color:#999; margin-left:8px;"><?php echo esc_html( $result['sku'] ); ?> &mdash; ID <?php echo (int) $result['product_id']; ?></span>
+                                    <span style="color:#999; margin-left:8px; font-size:12px;">(<?php echo esc_html( $result['product_type'] ); ?>)</span>
                                 </td>
                             </tr>
                             <tr>
@@ -126,6 +127,13 @@ class Order_Diagnostic {
                                             <span style="color:#dba617; margin-left:8px;"><?php esc_html_e( 'Backorders allowed (notify)', 'woocommerce-shipstation-integration-wr' ); ?></span>
                                         <?php endif; ?>
                                     <?php endif; ?>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 16px 4px 0; color:#50575e; white-space:nowrap;"><?php esc_html_e( 'All-time orders (SKU)', 'woocommerce-shipstation-integration-wr' ); ?></td>
+                                <td style="padding:4px 0;">
+                                    <strong><?php echo (int) $result['all_time_orders']; ?></strong>
+                                    <span style="color:#999; margin-left:6px; font-size:12px;"><?php esc_html_e( 'all statuses, no date filter', 'woocommerce-shipstation-integration-wr' ); ?></span>
                                 </td>
                             </tr>
                             <tr>
@@ -198,20 +206,62 @@ class Order_Diagnostic {
         $stock_qty    = $product ? $product->get_stock_quantity() : null;
         $manage_stock = $product ? $product->get_manage_stock() : false;
         $backorders   = $product ? $product->get_backorders() : 'no';
+        $product_type = $product ? $product->get_type() : '—';
 
-        // Fetch one extra row to detect truncation without a separate COUNT query.
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+        // For variations use _variation_id; for simple/parent products use _product_id.
+        $id_meta_key = ( $product && $product->is_type( 'variation' ) ) ? '_variation_id' : '_product_id';
+
+        // Build HPOS-aware order join and date column.
+        // wc_orders.date_created_gmt is UTC so convert the local input; post_date is local.
+        if ( $use_hpos ) {
+            $order_join  = "INNER JOIN {$wpdb->prefix}wc_orders o ON o.id = oi.order_id AND o.type = 'shop_order'";
+            $date_col    = 'o.date_created_gmt';
+            $filter_date = get_gmt_from_date( $since_datetime );
+        } else {
+            $order_join  = "INNER JOIN {$wpdb->posts} p ON p.ID = oi.order_id AND p.post_type = 'shop_order'";
+            $date_col    = 'p.post_date';
+            $filter_date = $since_datetime;
+        }
+
+        // All-time order count — no date filter — used to show scope vs. the window.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $all_time_orders = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(DISTINCT oi.order_id)
+                 FROM {$wpdb->prefix}woocommerce_order_items oi
+                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                     ON id_meta.order_item_id = oi.order_item_id
+                     AND id_meta.meta_key = %s
+                     AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                 $order_join
+                 WHERE oi.order_item_type = 'line_item'",
+                $id_meta_key,
+                $product_id
+            )
+        );
+
+        // Windowed query via order items — always authoritative across all order statuses.
+        // wc_order_product_lookup can be stale and in some WC versions only indexes completed orders.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $rows = $wpdb->get_results(
             $wpdb->prepare(
-                "SELECT order_id, SUM(product_qty) AS qty
-                 FROM {$wpdb->prefix}wc_order_product_lookup
-                 WHERE ( product_id = %d OR variation_id = %d )
-                   AND date_created >= %s
-                 GROUP BY order_id
+                "SELECT oi.order_id, SUM(CAST(qty_meta.meta_value AS SIGNED)) AS qty
+                 FROM {$wpdb->prefix}woocommerce_order_items oi
+                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta id_meta
+                     ON id_meta.order_item_id = oi.order_item_id
+                     AND id_meta.meta_key = %s
+                     AND CAST(id_meta.meta_value AS UNSIGNED) = %d
+                 INNER JOIN {$wpdb->prefix}woocommerce_order_itemmeta qty_meta
+                     ON qty_meta.order_item_id = oi.order_item_id
+                     AND qty_meta.meta_key = '_qty'
+                 $order_join
+                 WHERE oi.order_item_type = 'line_item'
+                   AND $date_col >= %s
+                 GROUP BY oi.order_id
                  LIMIT %d",
+                $id_meta_key,
                 $product_id,
-                $product_id,
-                $since_datetime,
+                $filter_date,
                 $max_orders + 1
             ),
             ARRAY_A
@@ -226,10 +276,12 @@ class Order_Diagnostic {
             'sku'              => $sku,
             'product_id'       => $product_id,
             'product_name'     => $product_name,
+            'product_type'     => $product_type,
             'stock_qty'        => $stock_qty,
             'manage_stock'     => $manage_stock,
             'backorders'       => $backorders,
             'since_datetime'   => $since_datetime,
+            'all_time_orders'  => $all_time_orders,
             'total_units'      => 0,
             'pending_units'    => 0,
             'status_breakdown' => [],
@@ -249,7 +301,7 @@ class Order_Diagnostic {
         $all_order_ids   = array_keys( $order_qty_map );
         $in_placeholders = implode( ',', array_fill( 0, count( $all_order_ids ), '%d' ) );
 
-        // Fetch status, date, and order total for all orders in one query.
+        // Fetch status, date, and order total for all matched orders in one query.
         if ( $use_hpos ) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $order_meta = $wpdb->get_results(
@@ -338,10 +390,12 @@ class Order_Diagnostic {
             'sku'              => $sku,
             'product_id'       => $product_id,
             'product_name'     => $product_name,
+            'product_type'     => $product_type,
             'stock_qty'        => $stock_qty,
             'manage_stock'     => $manage_stock,
             'backorders'       => $backorders,
             'since_datetime'   => $since_datetime,
+            'all_time_orders'  => $all_time_orders,
             'total_units'      => $total_units,
             'pending_units'    => $pending_units,
             'status_breakdown' => $status_breakdown,
